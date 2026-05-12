@@ -446,6 +446,26 @@ class BotRuntime:
             futures_exchanges = await self._prepare_futures_exchanges(config)
             if len(futures_exchanges) < 2:
                 raise RuntimeError("Need at least two futures research exchanges")
+            if self._should_use_common_futures(config.symbols):
+                common_symbols = await self._discover_common_futures_symbols(futures_exchanges)
+                if not common_symbols:
+                    raise RuntimeError("No common futures symbols found")
+                config = Config(
+                    exchanges=config.exchanges,
+                    symbols=common_symbols,
+                    trade_size_quote=config.trade_size_quote,
+                    min_net_profit_pct=config.min_net_profit_pct,
+                    default_taker_fee_pct=config.default_taker_fee_pct,
+                    slippage_pct=config.slippage_pct,
+                    poll_seconds=config.poll_seconds,
+                    orderbook_limit=config.orderbook_limit,
+                    mode=config.mode,
+                    live_trading=config.live_trading,
+                    live_confirm=config.live_confirm,
+                )
+                self.settings.symbols = ",".join(common_symbols)
+                save_settings(self.settings)
+                self.log("ready", f"Common futures symbols: {len(common_symbols)}")
             self.log("ready", f"FUTURES research {', '.join(config.symbols)}: {', '.join(futures_exchanges)}")
 
             while self.stop_event and not self.stop_event.is_set():
@@ -549,6 +569,68 @@ class BotRuntime:
         else:
             self.log("warn", "futures direct API needs at least two supported exchanges")
         return ready
+
+    def _should_use_common_futures(self, symbols: list[str]) -> bool:
+        markers = {"ALL", "COMMON", "COMMON_FUTURES", "AUTO"}
+        return any(symbol.upper().replace("/", "_") in markers for symbol in symbols)
+
+    async def _discover_common_futures_symbols(self, exchange_ids: list[str]) -> list[str]:
+        symbol_sets = await asyncio.gather(
+            *[self._fetch_futures_symbol_set(exchange_id) for exchange_id in exchange_ids],
+            return_exceptions=True,
+        )
+        clean_sets = [item for item in symbol_sets if isinstance(item, set) and item]
+        if len(clean_sets) < 2:
+            return []
+        common = set.intersection(*clean_sets)
+        priority = [
+            "BTC", "ETH", "SOL", "XRP", "DOGE", "BNB", "ADA", "AVAX", "LINK", "TRX",
+            "DOT", "LTC", "BCH", "UNI", "NEAR", "APT", "ARB", "OP", "SUI", "FIL",
+            "ATOM", "INJ", "ETC", "HBAR", "ICP", "FET", "WIF", "PEPE", "SHIB",
+        ]
+        ordered_bases = [base for base in priority if base in common]
+        ordered_bases.extend(sorted(base for base in common if base not in set(priority)))
+        return [f"{base}/USDT" for base in ordered_bases[:80]]
+
+    async def _fetch_futures_symbol_set(self, exchange_id: str) -> set[str]:
+        headers = {"User-Agent": "arb-bot/1.0"}
+        connector = aiohttp.TCPConnector(resolver=aiohttp.ThreadedResolver())
+        async with aiohttp.ClientSession(headers=headers, connector=connector) as session:
+            if exchange_id == "binance":
+                async with session.get("https://fapi.binance.com/fapi/v1/exchangeInfo", timeout=10) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+                return {
+                    item["baseAsset"].upper()
+                    for item in data.get("symbols", [])
+                    if item.get("quoteAsset") == "USDT"
+                    and item.get("contractType") == "PERPETUAL"
+                    and item.get("status") == "TRADING"
+                }
+            if exchange_id == "hyperliquid":
+                async with session.post("https://api.hyperliquid.xyz/info", json={"type": "meta"}, timeout=10) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+                return {item.get("name", "").upper() for item in data.get("universe", []) if item.get("name")}
+            if exchange_id == "okx":
+                async with session.get("https://www.okx.com/api/v5/public/instruments?instType=SWAP", timeout=10) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+                return {
+                    item.get("baseCcy", "").upper()
+                    for item in data.get("data", [])
+                    if item.get("settleCcy") == "USDT" and item.get("state") == "live"
+                }
+            if exchange_id == "bitget":
+                async with session.get("https://api.bitget.com/api/v2/mix/market/contracts?productType=USDT-FUTURES", timeout=10) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+                return {
+                    item.get("baseCoin", "").upper()
+                    for item in data.get("data", [])
+                    if item.get("quoteCoin") == "USDT" and item.get("symbolStatus") == "normal"
+                }
+        return set()
 
     def _find_usdt_swap_symbol(self, markets: dict[str, Any], spot_symbol: str) -> str | None:
         base, quote = spot_symbol.split("/") if "/" in spot_symbol else (spot_symbol, "USDT")
