@@ -32,6 +32,10 @@ const spreadChartEl = document.querySelector("#spread-chart");
 const spreadRankingEl = document.querySelector("#spread-ranking");
 const preflightButton = document.querySelector("#preflight-button");
 const preflightResultsEl = document.querySelector("#preflight-results");
+const historyRefreshButton = document.querySelector("#history-refresh-button");
+const historyAppLogEl = document.querySelector("#history-app-log");
+const historyTradesEl = document.querySelector("#history-trades");
+const historyFilesEl = document.querySelector("#history-files");
 
 let settingsApplied = false;
 const exchangeUniverse = ["binance", "okx", "bitget"];
@@ -379,6 +383,31 @@ async function loadState() {
   renderState(state);
 }
 
+async function loadHistory() {
+  const response = await fetch("/api/history?limit=300");
+  const history = await response.json();
+  const appLines = history.app_log || [];
+  historyAppLogEl.textContent = appLines.length ? appLines.join("\n") : "まだファイルログはありません";
+  historyTradesEl.innerHTML = (history.trades || []).map((trade) => `
+    <tr>
+      <td>${trade.timestamp ? new Date(trade.timestamp).toLocaleString() : "-"}</td>
+      <td>${escapeHtml(trade.symbol || "-")}</td>
+      <td>${escapeHtml(trade.buy_exchange || "-")} → ${escapeHtml(trade.sell_exchange || "-")}</td>
+      <td>${moneyText(trade.quote_amount)}</td>
+      <td>${numberText(trade.net_profit_pct)}%</td>
+      <td class="${Number(trade.profit_quote) >= 0 ? "positive" : "negative"}">${Number(trade.profit_quote) >= 0 ? "+" : ""}${moneyText(trade.profit_quote)}</td>
+    </tr>
+  `).join("");
+  if (!historyTradesEl.innerHTML) {
+    historyTradesEl.innerHTML = `<tr><td colspan="6" class="empty-cell">保存済み取引はまだありません</td></tr>`;
+  }
+  const files = history.files || {};
+  historyFilesEl.innerHTML = `
+    保存先: ${escapeHtml(files.app_log || "")} / ${escapeHtml(files.trades || "")} / ${escapeHtml(files.spread_history || "")}
+    <a href="/api/history/app-log.txt" target="_blank" rel="noreferrer">app.logを開く</a>
+  `;
+}
+
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const state = await postJson("/api/start", settingsFromForm());
@@ -440,6 +469,8 @@ preflightButton.addEventListener("click", async () => {
   if (state) renderState(state);
 });
 
+historyRefreshButton.addEventListener("click", loadHistory);
+
 modeSelect.addEventListener("change", () => {
   liveConfirmRow.classList.toggle("hidden", modeSelect.value !== "live");
 });
@@ -478,4 +509,5 @@ exchangeInput.addEventListener("input", renderExchangeOptions);
 renderSymbolOptions();
 renderExchangeOptions();
 loadState();
+loadHistory();
 setInterval(loadState, 1500);

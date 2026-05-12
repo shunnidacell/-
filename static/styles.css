@@ -720,9 +720,62 @@ td.detail {
   color: var(--danger);
 }
 
+.history-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 18px;
+}
+
+.subhead {
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.history-box {
+  height: 320px;
+  margin: 0;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.history-table {
+  max-height: 320px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.empty-cell {
+  color: var(--muted);
+  text-align: center;
+}
+
+.file-hint {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.file-hint a {
+  margin-left: 8px;
+  color: var(--blue);
+  font-weight: 800;
+}
+
 @media (max-width: 1180px) {
   .app-shell,
-  .dashboard-grid {
+  .dashboard-grid,
+  .history-grid {
     grid-template-columns: 1fr;
   }
 

@@ -34,6 +34,10 @@ from arb_bot import (
 ROOT = Path(__file__).parent
 STATIC_DIR = ROOT / "static"
 SETTINGS_PATH = ROOT / "settings.json"
+LOG_DIR = ROOT / "logs"
+APP_LOG_PATH = LOG_DIR / "app.log"
+TRADE_LOG_PATH = LOG_DIR / "trades.jsonl"
+SPREAD_LOG_PATH = LOG_DIR / "spread_history.jsonl"
 LIVE_CONFIRM_TEXT = "I_UNDERSTAND_REAL_ORDERS"
 
 load_dotenv(ROOT / ".env")
@@ -150,6 +154,35 @@ def save_settings(settings: BotSettings) -> None:
     data = settings.model_dump()
     data["live_confirm"] = ""
     SETTINGS_PATH.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def append_text_log(path: Path, line: str) -> None:
+    LOG_DIR.mkdir(exist_ok=True)
+    with path.open("a", encoding="utf-8") as file:
+        file.write(line.rstrip() + "\n")
+
+
+def append_jsonl(path: Path, item: dict[str, Any]) -> None:
+    LOG_DIR.mkdir(exist_ok=True)
+    with path.open("a", encoding="utf-8") as file:
+        file.write(json.dumps(to_jsonable(item), ensure_ascii=False, separators=(",", ":")) + "\n")
+
+
+def read_tail_lines(path: Path, limit: int = 300) -> list[str]:
+    if not path.exists():
+        return []
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    return lines[-limit:]
+
+
+def read_tail_jsonl(path: Path, limit: int = 200) -> list[dict[str, Any]]:
+    rows = []
+    for line in read_tail_lines(path, limit):
+        try:
+            rows.append(json.loads(line))
+        except json.JSONDecodeError:
+            rows.append({"raw": line})
+    return rows
 
 
 def has_private_credentials(exchange_id: str) -> bool:
@@ -285,6 +318,7 @@ class DemoBroker:
             "status": "simulated_fill",
         }
         self.trades.appendleft(to_jsonable(trade))
+        append_jsonl(TRADE_LOG_PATH, trade)
         return trade
 
     def portfolio(self) -> dict[str, Any]:
@@ -317,6 +351,7 @@ class DemoBroker:
             "status": "manual_fill",
         }
         self.trades.appendleft(to_jsonable(trade))
+        append_jsonl(TRADE_LOG_PATH, trade)
         return trade
 
 
@@ -341,13 +376,15 @@ class BotRuntime:
         self.stopped_at: str | None = None
 
     def log(self, level: str, message: str) -> None:
-        self.logs.appendleft(
-            {
-                "time": datetime.now().astimezone().strftime("%H:%M:%S"),
-                "level": level,
-                "message": message,
-            }
-        )
+        now = datetime.now().astimezone()
+        item = {
+            "time": now.strftime("%H:%M:%S"),
+            "timestamp": now.isoformat(),
+            "level": level,
+            "message": message,
+        }
+        self.logs.appendleft(item)
+        append_text_log(APP_LOG_PATH, f"{item['timestamp']}\t{level}\t{message}")
 
     async def start(self, settings: BotSettings) -> None:
         async with self.lock:
@@ -569,14 +606,14 @@ class BotRuntime:
                 }
             )
 
-        self.spread_history.append(
-            to_jsonable(
-                {
-                    "timestamp": datetime.now(timezone.utc),
-                    "points": points,
-                }
-            )
+        item = to_jsonable(
+            {
+                "timestamp": datetime.now(timezone.utc),
+                "points": points,
+            }
         )
+        self.spread_history.append(item)
+        append_jsonl(SPREAD_LOG_PATH, item)
 
     def set_demo_price_adjustment(self, request: DemoPriceAdjustment) -> None:
         key = (request.exchange_id.strip().lower(), request.symbol.strip().upper())
@@ -768,7 +805,7 @@ class BotRuntime:
             )
             self.demo.trades.appendleft(
                 to_jsonable(
-                    {
+                    trade := {
                         "timestamp": datetime.now(timezone.utc),
                         "symbol": opportunity.symbol,
                         "buy_exchange": opportunity.buy_exchange,
@@ -784,6 +821,7 @@ class BotRuntime:
                     }
                 )
             )
+            append_jsonl(TRADE_LOG_PATH, trade)
         except Exception as exc:
             self.log("error", f"本番発注失敗: {type(exc).__name__}: {exc}")
 
@@ -846,6 +884,28 @@ async def index():
 @app.get("/api/state")
 async def get_state():
     return runtime.state()
+
+
+@app.get("/api/history")
+async def get_history(limit: int = 200):
+    limit = max(1, min(limit, 1000))
+    return {
+        "app_log": read_tail_lines(APP_LOG_PATH, limit),
+        "trades": list(reversed(read_tail_jsonl(TRADE_LOG_PATH, limit))),
+        "spread_history": list(reversed(read_tail_jsonl(SPREAD_LOG_PATH, limit))),
+        "files": {
+            "app_log": str(APP_LOG_PATH),
+            "trades": str(TRADE_LOG_PATH),
+            "spread_history": str(SPREAD_LOG_PATH),
+        },
+    }
+
+
+@app.get("/api/history/app-log.txt")
+async def download_app_log():
+    if not APP_LOG_PATH.exists():
+        raise HTTPException(status_code=404, detail="app.log is not created yet")
+    return FileResponse(APP_LOG_PATH, media_type="text/plain", filename="app.log")
 
 
 @app.post("/api/start")

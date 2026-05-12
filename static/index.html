@@ -277,6 +277,38 @@
             <div id="logs" class="logs"></div>
           </section>
         </section>
+
+        <section class="panel">
+          <div class="section-title">
+            <h2>過去ログ</h2>
+            <button type="button" id="history-refresh-button">読み込み</button>
+          </div>
+          <div class="history-grid">
+            <div>
+              <div class="subhead">アプリログ</div>
+              <pre id="history-app-log" class="history-box">まだ読み込んでいません</pre>
+            </div>
+            <div>
+              <div class="subhead">保存済み取引</div>
+              <div class="table-wrap history-table">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>時刻</th>
+                      <th>銘柄</th>
+                      <th>経路</th>
+                      <th>取引額</th>
+                      <th>純利益率</th>
+                      <th>利益</th>
+                    </tr>
+                  </thead>
+                  <tbody id="history-trades"></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div id="history-files" class="file-hint"></div>
+        </section>
       </section>
     </main>
 
