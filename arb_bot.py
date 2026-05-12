@@ -111,7 +111,7 @@ def load_config() -> Config:
     )
 
 
-def make_exchange(exchange_id: str, private: bool = False):
+def make_exchange(exchange_id: str, private: bool = False, market_type: str = "spot"):
     exchange_class = getattr(ccxt, exchange_id, None)
     if exchange_class is None:
         raise ValueError(f"Unknown ccxt exchange id: {exchange_id}")
@@ -119,7 +119,7 @@ def make_exchange(exchange_id: str, private: bool = False):
     options = {
         "enableRateLimit": True,
         "timeout": 10000,
-        "options": {"defaultType": "spot"},
+        "options": {"defaultType": market_type},
     }
     if private:
         prefix = exchange_id.upper()
@@ -136,7 +136,7 @@ def make_exchange(exchange_id: str, private: bool = False):
     return exchange_class(options)
 
 
-def make_sync_exchange(exchange_id: str, private: bool = False):
+def make_sync_exchange(exchange_id: str, private: bool = False, market_type: str = "spot"):
     exchange_class = getattr(ccxt_sync, exchange_id, None)
     if exchange_class is None:
         raise ValueError(f"Unknown ccxt exchange id: {exchange_id}")
@@ -144,7 +144,7 @@ def make_sync_exchange(exchange_id: str, private: bool = False):
     options = {
         "enableRateLimit": True,
         "timeout": 10000,
-        "options": {"defaultType": "spot"},
+        "options": {"defaultType": market_type},
     }
     if private:
         prefix = exchange_id.upper()

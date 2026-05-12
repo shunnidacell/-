@@ -30,6 +30,7 @@ const demoPriceForm = document.querySelector("#demo-price-form");
 const clearDemoPriceButton = document.querySelector("#clear-demo-price-button");
 const spreadChartEl = document.querySelector("#spread-chart");
 const spreadRankingEl = document.querySelector("#spread-ranking");
+const futuresSpreadResearchEl = document.querySelector("#futures-spread-research");
 const preflightButton = document.querySelector("#preflight-button");
 const preflightResultsEl = document.querySelector("#preflight-results");
 const historyRefreshButton = document.querySelector("#history-refresh-button");
@@ -255,6 +256,24 @@ function renderSpreadChart(history) {
   `;
 }
 
+function renderFuturesResearch(history) {
+  const latest = (history || []).at(-1);
+  const points = (latest?.points || []).slice(0, 12);
+  if (!points.length) {
+    futuresSpreadResearchEl.className = "ranking-list empty";
+    futuresSpreadResearchEl.textContent = "開始後に先物価格差を記録します";
+    return;
+  }
+  futuresSpreadResearchEl.className = "ranking-list";
+  futuresSpreadResearchEl.innerHTML = points.map((point) => `
+    <article class="ranking-row ${Number(point.spread_pct) >= 0.2 ? "positive-rank" : ""}">
+      <div><strong>${escapeHtml(point.symbol)}</strong><span>${escapeHtml(point.direction || "")}</span></div>
+      <div><span>Low ${numberText(point.low_mid, 8)}</span><span>High ${numberText(point.high_mid, 8)}</span></div>
+      <div class="rank-net ${Number(point.spread_pct) >= 0.2 ? "positive" : ""}">${numberText(point.spread_pct)}%</div>
+    </article>
+  `).join("");
+}
+
 function renderState(state) {
   const marketStatuses = state.market_statuses || [];
   const settings = state.settings || {};
@@ -371,6 +390,7 @@ function renderState(state) {
 
   renderSpreadRanking(state);
   renderSpreadChart(state.spread_history || []);
+  renderFuturesResearch(state.futures_spread_history || []);
 }
 
 async function loadState() {
@@ -403,7 +423,7 @@ async function loadHistory() {
   }
   const files = history.files || {};
   historyFilesEl.innerHTML = `
-    保存先: ${escapeHtml(files.app_log || "")} / ${escapeHtml(files.trades || "")} / ${escapeHtml(files.spread_history || "")}
+    保存先: ${escapeHtml(files.app_log || "")} / ${escapeHtml(files.trades || "")} / ${escapeHtml(files.spread_history || "")} / ${escapeHtml(files.futures_spread_history || "")}
     <a href="/api/history/app-log.txt" target="_blank" rel="noreferrer">app.logを開く</a>
   `;
 }

@@ -10,6 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+import aiohttp
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -38,6 +39,7 @@ LOG_DIR = ROOT / "logs"
 APP_LOG_PATH = LOG_DIR / "app.log"
 TRADE_LOG_PATH = LOG_DIR / "trades.jsonl"
 SPREAD_LOG_PATH = LOG_DIR / "spread_history.jsonl"
+FUTURES_SPREAD_LOG_PATH = LOG_DIR / "futures_spread_history.jsonl"
 LIVE_CONFIRM_TEXT = "I_UNDERSTAND_REAL_ORDERS"
 
 load_dotenv(ROOT / ".env")
@@ -365,6 +367,8 @@ class BotRuntime:
         self.market_statuses: list[dict[str, Any]] = []
         self.opportunities: list[dict[str, Any]] = []
         self.spread_history: deque[dict[str, Any]] = deque(maxlen=300)
+        self.futures_spread_history: deque[dict[str, Any]] = deque(maxlen=500)
+        self.futures_market_statuses: list[dict[str, Any]] = []
         self.balances: list[dict[str, Any]] = []
         self.exchange_handles: dict[str, Any] = {}
         self.preflight_results: list[dict[str, Any]] = []
@@ -436,8 +440,10 @@ class BotRuntime:
 
     async def _run(self, config: Config, auto_execute: bool) -> None:
         exchanges = []
+        futures_exchanges = []
         try:
             exchanges = await self._prepare_exchanges(config)
+            futures_exchanges = await self._prepare_futures_exchanges(config)
             self.log("ready", f"{', '.join(config.symbols)}: {', '.join(exchange.id for exchange in exchanges)}")
 
             while self.stop_event and not self.stop_event.is_set():
@@ -465,6 +471,8 @@ class BotRuntime:
                     for item in quote_results
                 ]
                 self._record_spread_history(valid_quotes, config)
+                if len(futures_exchanges) >= 2:
+                    await self._record_futures_spread_history(futures_exchanges, config)
                 self.opportunities = [to_jsonable(asdict(item)) for item in opportunities[:50]]
                 self.last_tick = datetime.now().astimezone().isoformat()
 
@@ -560,6 +568,32 @@ class BotRuntime:
             await asyncio.gather(*(exchange.close() for exchange in ready), return_exceptions=True)
             raise
 
+    async def _prepare_futures_exchanges(self, config: Config):
+        ready = [exchange_id for exchange_id in config.exchanges if exchange_id in {"binance", "okx", "bitget"}]
+        if len(ready) >= 2:
+            self.log("ready", f"futures direct API: {', '.join(ready)}")
+        else:
+            self.log("warn", "futures direct API needs at least two supported exchanges")
+        return ready
+
+    def _find_usdt_swap_symbol(self, markets: dict[str, Any], spot_symbol: str) -> str | None:
+        base, quote = spot_symbol.split("/") if "/" in spot_symbol else (spot_symbol, "USDT")
+        candidates = [f"{base}/USDT:USDT", spot_symbol]
+        for candidate in candidates:
+            market = markets.get(candidate)
+            if market and market.get("swap") and market.get("linear"):
+                return candidate
+        for symbol, market in markets.items():
+            if (
+                market.get("base") == base
+                and market.get("quote") == "USDT"
+                and market.get("settle") == "USDT"
+                and market.get("swap")
+                and market.get("linear")
+            ):
+                return symbol
+        return None
+
     def _scan_sizes(self, settings: BotSettings, config: Config) -> list[Decimal]:
         if not settings.optimize_trade_size:
             return [config.trade_size_quote]
@@ -614,6 +648,126 @@ class BotRuntime:
         )
         self.spread_history.append(item)
         append_jsonl(SPREAD_LOG_PATH, item)
+
+    async def _record_futures_spread_history(self, exchanges, config: Config) -> None:
+        quote_results = await asyncio.gather(
+            *[
+                self._fetch_futures_quote(exchange_id, symbol, config)
+                for exchange_id in exchanges
+                for symbol in config.symbols
+            ],
+            return_exceptions=True,
+        )
+        quotes = [item for item in quote_results if isinstance(item, dict) and item.get("status") == "ok"]
+        statuses = [item for item in quote_results if isinstance(item, dict)]
+        self.futures_market_statuses = to_jsonable(statuses)
+
+        by_symbol: dict[str, list[dict[str, Any]]] = {}
+        for quote in quotes:
+            by_symbol.setdefault(quote["symbol"], []).append(quote)
+
+        points = []
+        for symbol, items in by_symbol.items():
+            if len(items) < 2:
+                continue
+            pairs = [
+                (low, high)
+                for low in items
+                for high in items
+                if low["exchange_id"] != high["exchange_id"] and low["mid"] > 0
+            ]
+            if not pairs:
+                continue
+            low, high = max(pairs, key=lambda pair: pair[1]["mid"] - pair[0]["mid"])
+            spread_pct = ((high["mid"] - low["mid"]) / low["mid"]) * Decimal("100")
+            points.append(
+                {
+                    "symbol": symbol,
+                    "long_exchange": low["exchange_id"],
+                    "short_exchange": high["exchange_id"],
+                    "low_mid": low["mid"],
+                    "high_mid": high["mid"],
+                    "spread_pct": spread_pct,
+                    "direction": f"long {low['exchange_id']} / short {high['exchange_id']}",
+                }
+            )
+
+        item = to_jsonable(
+            {
+                "timestamp": datetime.now(timezone.utc),
+                "points": sorted(points, key=lambda point: Decimal(str(point["spread_pct"])), reverse=True),
+            }
+        )
+        self.futures_spread_history.append(item)
+        append_jsonl(FUTURES_SPREAD_LOG_PATH, item)
+
+    async def _fetch_futures_quote(self, exchange_id: str, spot_symbol: str, config: Config) -> dict[str, Any]:
+        try:
+            orderbook = await self._fetch_direct_futures_orderbook(exchange_id, spot_symbol, config.orderbook_limit)
+            bids = orderbook.get("bids") or []
+            asks = orderbook.get("asks") or []
+            if not bids or not asks:
+                return {
+                    "exchange_id": exchange_id,
+                    "symbol": spot_symbol,
+                    "futures_symbol": self._futures_symbol(exchange_id, spot_symbol),
+                    "status": "no_quote",
+                    "message": "futures order book is empty",
+                }
+            bid = Decimal(str(bids[0][0]))
+            ask = Decimal(str(asks[0][0]))
+            return {
+                "exchange_id": exchange_id,
+                "symbol": spot_symbol,
+                "futures_symbol": self._futures_symbol(exchange_id, spot_symbol),
+                "status": "ok",
+                "bid": bid,
+                "ask": ask,
+                "mid": (bid + ask) / Decimal("2"),
+                "timestamp": datetime.now(timezone.utc),
+            }
+        except Exception as exc:
+            return {
+                "exchange_id": exchange_id,
+                "symbol": spot_symbol,
+                "futures_symbol": self._futures_symbol(exchange_id, spot_symbol),
+                "status": "error",
+                "message": f"{type(exc).__name__}: {exc}",
+            }
+
+    def _futures_symbol(self, exchange_id: str, symbol: str) -> str:
+        compact = symbol.replace("/", "").replace("-", "").upper()
+        if exchange_id == "okx":
+            return symbol.replace("/", "-").upper() + "-SWAP"
+        return compact
+
+    async def _fetch_direct_futures_orderbook(self, exchange_id: str, symbol: str, limit: int) -> dict[str, Any]:
+        compact = symbol.replace("/", "").replace("-", "").upper()
+        headers = {"User-Agent": "arb-bot/1.0"}
+        connector = aiohttp.TCPConnector(resolver=aiohttp.ThreadedResolver())
+
+        if exchange_id == "binance":
+            url = f"https://fapi.binance.com/fapi/v1/depth?symbol={compact}&limit={limit}"
+        elif exchange_id == "okx":
+            inst_id = symbol.replace("/", "-").upper() + "-SWAP"
+            url = f"https://www.okx.com/api/v5/market/books?instId={inst_id}&sz={limit}"
+        elif exchange_id == "bitget":
+            url = f"https://api.bitget.com/api/v2/mix/market/orderbook?symbol={compact}&productType=USDT-FUTURES&limit={limit}"
+        else:
+            raise ValueError(f"unsupported futures exchange: {exchange_id}")
+
+        async with aiohttp.ClientSession(headers=headers, connector=connector) as session:
+            async with session.get(url, timeout=10) as response:
+                response.raise_for_status()
+                data = await response.json()
+
+        if exchange_id == "okx":
+            book = (data.get("data") or [{}])[0]
+            return {"bids": book.get("bids", []), "asks": book.get("asks", [])}
+        if exchange_id == "bitget":
+            book = data.get("data") or {}
+            return {"bids": book.get("bids", []), "asks": book.get("asks", [])}
+        return {"bids": data.get("bids", []), "asks": data.get("asks", [])}
 
     def set_demo_price_adjustment(self, request: DemoPriceAdjustment) -> None:
         key = (request.exchange_id.strip().lower(), request.symbol.strip().upper())
@@ -858,6 +1012,8 @@ class BotRuntime:
             "market_statuses": self.market_statuses,
             "opportunities": self.opportunities,
             "spread_history": list(self.spread_history),
+            "futures_spread_history": list(self.futures_spread_history),
+            "futures_market_statuses": self.futures_market_statuses,
             "logs": list(self.logs),
             "last_error": self.last_error,
             "last_tick": self.last_tick,
@@ -893,10 +1049,12 @@ async def get_history(limit: int = 200):
         "app_log": read_tail_lines(APP_LOG_PATH, limit),
         "trades": list(reversed(read_tail_jsonl(TRADE_LOG_PATH, limit))),
         "spread_history": list(reversed(read_tail_jsonl(SPREAD_LOG_PATH, limit))),
+        "futures_spread_history": list(reversed(read_tail_jsonl(FUTURES_SPREAD_LOG_PATH, limit))),
         "files": {
             "app_log": str(APP_LOG_PATH),
             "trades": str(TRADE_LOG_PATH),
             "spread_history": str(SPREAD_LOG_PATH),
+            "futures_spread_history": str(FUTURES_SPREAD_LOG_PATH),
         },
     }
 
