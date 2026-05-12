@@ -83,6 +83,16 @@ class PreflightRequest(BaseModel):
     quote_amount: float = Field(default=25, gt=0)
 
 
+class FuturesPaperPosition(BaseModel):
+    symbol: str
+    direction: str
+    entry_spread_pct: float
+    quote_amount: float
+    opened_at: str
+    add_count: int = 0
+    last_spread_pct: float
+
+
 def parse_csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
@@ -375,6 +385,8 @@ class BotRuntime:
         self.exchange_handles: dict[str, Any] = {}
         self.preflight_results: list[dict[str, Any]] = []
         self.demo_price_adjustments: dict[tuple[str, str], dict[str, Decimal]] = {}
+        self.futures_positions: dict[str, dict[str, Any]] = {}
+        self.futures_closed_trades: deque[dict[str, Any]] = deque(maxlen=300)
         self.demo = DemoBroker()
         self.settings = load_saved_settings() or config_to_settings(load_config())
         self.last_error: str | None = None
@@ -482,6 +494,8 @@ class BotRuntime:
                         "futures",
                         f"{best['symbol']} {best['direction']} spread {Decimal(str(best['spread_pct'])):.4f}%",
                     )
+                    if auto_execute:
+                        self._update_futures_paper_strategy(latest["points"])
                 else:
                     self.log("futures", "No futures spread data")
 
@@ -1050,6 +1064,79 @@ class BotRuntime:
         except Exception as exc:
             self.log("error", f"譛ｬ逡ｪ逋ｺ豕ｨ螟ｱ謨・ {type(exc).__name__}: {exc}")
 
+    def _update_futures_paper_strategy(self, points: list[dict[str, Any]]) -> None:
+        entry_threshold = Decimal(os.getenv("FUTURES_ENTRY_SPREAD_PCT", "1.0"))
+        add_threshold = Decimal(os.getenv("FUTURES_ADD_SPREAD_PCT", "1.5"))
+        take_profit_threshold = Decimal(os.getenv("FUTURES_EXIT_SPREAD_PCT", "0.2"))
+        compromise_minutes = Decimal(os.getenv("FUTURES_COMPROMISE_MINUTES", "60"))
+        compromise_threshold = Decimal(os.getenv("FUTURES_COMPROMISE_EXIT_SPREAD_PCT", "0.5"))
+        quote_amount = Decimal(os.getenv("FUTURES_PAPER_QUOTE", "10"))
+        now = datetime.now(timezone.utc)
+
+        for point in points:
+            symbol = point["symbol"]
+            spread = Decimal(str(point["spread_pct"]))
+            position = self.futures_positions.get(symbol)
+
+            if position is None:
+                if spread >= entry_threshold:
+                    self.futures_positions[symbol] = {
+                        "symbol": symbol,
+                        "direction": point.get("direction", ""),
+                        "entry_spread_pct": spread,
+                        "quote_amount": quote_amount,
+                        "opened_at": now,
+                        "add_count": 0,
+                        "last_spread_pct": spread,
+                    }
+                    self.log("paper", f"FUTURES PAPER entry {symbol}: {spread:.4f}% {point.get('direction', '')}")
+                continue
+
+            position["last_spread_pct"] = spread
+            held_minutes = Decimal(str((now - position["opened_at"]).total_seconds() / 60))
+            if position["add_count"] == 0 and spread >= add_threshold:
+                old_amount = Decimal(str(position["quote_amount"]))
+                old_entry = Decimal(str(position["entry_spread_pct"]))
+                new_amount = old_amount + quote_amount
+                position["entry_spread_pct"] = ((old_entry * old_amount) + (spread * quote_amount)) / new_amount
+                position["quote_amount"] = new_amount
+                position["add_count"] += 1
+                self.log("paper", f"FUTURES PAPER add {symbol}: {spread:.4f}% avg {position['entry_spread_pct']:.4f}%")
+
+            should_take_profit = spread <= take_profit_threshold
+            should_compromise = held_minutes >= compromise_minutes and spread <= compromise_threshold
+            if not (should_take_profit or should_compromise):
+                continue
+
+            entry = Decimal(str(position["entry_spread_pct"]))
+            amount = Decimal(str(position["quote_amount"]))
+            profit = amount * ((entry - spread) / Decimal("100"))
+            trade = {
+                "timestamp": now,
+                "symbol": symbol,
+                "buy_exchange": "",
+                "sell_exchange": "",
+                "buy_price": Decimal("0"),
+                "sell_price": Decimal("0"),
+                "base_amount": Decimal("0"),
+                "quote_amount": amount,
+                "net_profit_pct": entry - spread,
+                "profit_quote": profit,
+                "mode": "futures_paper",
+                "status": "take_profit" if should_take_profit else "compromise_exit",
+                "entry_spread_pct": entry,
+                "exit_spread_pct": spread,
+                "held_minutes": held_minutes,
+                "add_count": position["add_count"],
+                "direction": position.get("direction", ""),
+            }
+            json_trade = to_jsonable(trade)
+            self.futures_closed_trades.appendleft(json_trade)
+            self.demo.trades.appendleft(json_trade)
+            append_jsonl(TRADE_LOG_PATH, trade)
+            self.log("paper", f"FUTURES PAPER exit {symbol}: entry {entry:.4f}% exit {spread:.4f}% pnl {profit:.4f}")
+            self.futures_positions.pop(symbol, None)
+
     async def _refresh_balances(self, exchanges) -> None:
         balances = []
         for exchange in exchanges:
@@ -1091,6 +1178,8 @@ class BotRuntime:
             "stopped_at": self.stopped_at,
             "portfolio": self.demo.portfolio(),
             "trades": list(self.demo.trades),
+            "futures_positions": to_jsonable(list(self.futures_positions.values())),
+            "futures_closed_trades": list(self.futures_closed_trades),
             "balances": self.balances,
             "preflight_results": self.preflight_results,
             "live_ready": os.getenv("LIVE_TRADING", "false").strip().lower() == "true",
