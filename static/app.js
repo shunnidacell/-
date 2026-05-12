@@ -294,9 +294,11 @@ function renderState(state) {
     runNoticeEl.textContent = `停止中: 価格監視と自動デモ取引は止まっています。${stoppedText}`;
   }
 
+  const latestFutures = (state.futures_spread_history || []).at(-1);
+  const futuresPoints = latestFutures?.points || [];
   marketCountEl.textContent = marketStatuses.length;
-  opportunityCountEl.textContent = (state.opportunities || []).length;
-  bestProfitEl.textContent = state.opportunities?.[0] ? `${numberText(state.opportunities[0].net_profit_pct)}%` : "-";
+  opportunityCountEl.textContent = futuresPoints.length;
+  bestProfitEl.textContent = futuresPoints[0] ? `${numberText(futuresPoints[0].spread_pct)}%` : "-";
   demoProfitEl.textContent = moneyText(portfolio.realized_profit || 0);
   demoProfitEl.classList.toggle("positive", Number(portfolio.realized_profit || 0) >= 0);
   demoCashEl.textContent = `Cash ${moneyText(portfolio.cash || 0)}`;
@@ -316,25 +318,25 @@ function renderState(state) {
     </tr>
   `).join("");
 
-  if (!state.opportunities?.length) {
+  if (!futuresPoints.length) {
     oppsEl.className = "opportunity-list empty";
-    oppsEl.textContent = state.last_error || "まだ候補はありません";
+    oppsEl.textContent = state.last_error || "開始後に先物価格差を表示します";
   } else {
     oppsEl.className = "opportunity-list";
-    const maxProfit = Math.max(...state.opportunities.map((item) => Number(item.net_profit_pct)));
-    oppsEl.innerHTML = state.opportunities.map((item) => {
-      const width = Math.max(8, Math.min(100, (Number(item.net_profit_pct) / maxProfit) * 100));
+    const maxProfit = Math.max(...futuresPoints.map((item) => Number(item.spread_pct)));
+    oppsEl.innerHTML = futuresPoints.slice(0, 8).map((item) => {
+      const width = Math.max(8, Math.min(100, maxProfit > 0 ? (Number(item.spread_pct) / maxProfit) * 100 : 8));
       return `
         <article class="opportunity">
           <div>
-            <div class="route">${escapeHtml(item.symbol)} <span>${escapeHtml(item.buy_exchange)}</span> → <span>${escapeHtml(item.sell_exchange)}</span></div>
-            <div class="muted">Buy ${numberText(item.buy_price, 8)} / Sell ${numberText(item.sell_price, 8)}</div>
+            <div class="route">${escapeHtml(item.symbol)} <span>${escapeHtml(item.long_exchange)}</span> long → <span>${escapeHtml(item.short_exchange)}</span> short</div>
+            <div class="muted">Low ${numberText(item.low_mid, 8)} / High ${numberText(item.high_mid, 8)}</div>
           </div>
           <div>
             <div class="profit-bar"><div style="width:${width}%"></div></div>
-            <div class="muted">Gross ${numberText(item.gross_profit_pct)}% / Size ${moneyText(item.quote_amount)}</div>
+            <div class="muted">${escapeHtml(item.direction || "")}</div>
           </div>
-          <div class="profit-number">+${numberText(item.net_profit_pct)}%</div>
+          <div class="profit-number">${numberText(item.spread_pct)}%</div>
         </article>
       `;
     }).join("");

@@ -47,14 +47,8 @@
               </label>
             </div>
 
-            <label>
-              <span>取引所</span>
-              <input name="exchanges" value="binance,bitget" />
-            </label>
-            <div class="quick-picker">
-              <div class="picker-head"><span>取引所クイック選択</span></div>
-              <div id="exchange-options" class="chip-list"></div>
-            </div>
+            <input type="hidden" name="exchanges" value="binance,bitget" />
+            <div id="exchange-options" class="hidden"></div>
 
             <label>
               <span>先物リサーチ取引所</span>
@@ -151,18 +145,18 @@
 
       <section class="content">
         <section class="metrics">
-          <div class="metric"><span>市場数</span><strong id="market-count">0</strong></div>
-          <div class="metric"><span>裁定候補</span><strong id="opportunity-count">0</strong></div>
-          <div class="metric"><span>最高純利益</span><strong id="best-profit">-</strong></div>
+          <div class="metric"><span>先物市場数</span><strong id="market-count">0</strong></div>
+          <div class="metric"><span>記録中ペア</span><strong id="opportunity-count">0</strong></div>
+          <div class="metric"><span>最大価格差</span><strong id="best-profit">-</strong></div>
           <div class="metric"><span>デモ損益</span><strong id="demo-profit">0</strong></div>
         </section>
 
         <section class="panel hero-panel">
           <div class="section-title">
-            <h2>裁定候補</h2>
+            <h2>先物価格差サマリー</h2>
             <span id="last-tick">未取得</span>
           </div>
-          <div id="opportunities" class="opportunity-list empty">まだ候補はありません</div>
+          <div id="opportunities" class="opportunity-list empty">開始後に先物価格差を表示します</div>
         </section>
 
         <section class="dashboard-grid">
@@ -193,8 +187,8 @@
 
         <section class="panel">
           <div class="section-title">
-            <h2>リアルタイム価格</h2>
-            <span>Bid / Ask / 手数料</span>
+            <h2>リアルタイム先物価格</h2>
+            <span>Bid / Ask / Mid</span>
           </div>
           <div class="table-wrap tall">
             <table>

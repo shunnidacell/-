@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import json
@@ -107,9 +107,9 @@ def settings_to_config(settings: BotSettings) -> Config:
     exchange_ids = [item.lower() for item in parse_csv(settings.exchanges)]
     symbols = [item.upper() for item in parse_csv(settings.symbols)]
     if len(exchange_ids) < 2:
-        raise ValueError("取引所は2つ以上指定してください")
+        raise ValueError("蜿門ｼ墓園縺ｯ2縺､莉･荳頑欠螳壹＠縺ｦ縺上□縺輔＞")
     if not symbols:
-        raise ValueError("銘柄は1つ以上指定してください")
+        raise ValueError("驫俶氛縺ｯ1縺､莉･荳頑欠螳壹＠縺ｦ縺上□縺輔＞")
     if settings.mode not in {"demo", "live"}:
         raise ValueError("mode must be demo or live")
 
@@ -243,16 +243,16 @@ def run_preflight_sync(request: PreflightRequest, fallback_fee_pct: Decimal) -> 
                 can_quote = quote_balance is None or quote_balance >= quote_amount
                 message_parts = []
                 if min_cost and quote_amount < Decimal(str(min_cost)):
-                    message_parts.append(f"最小注文金額 {min_cost} 超え必要")
+                    message_parts.append(f"最小注文金額 {min_cost} を下回っています")
                 if quote_balance is not None and not can_quote:
-                    message_parts.append(f"{quote}残高不足")
+                    message_parts.append(f"{quote}谿矩ｫ倅ｸ崎ｶｳ")
                 status = "ok" if not message_parts else "warn"
                 results.append(
                     {
                         "exchange_id": exchange_id,
                         "symbol": symbol,
                         "status": status,
-                        "message": " / ".join(message_parts) or "取引可能",
+                        "message": " / ".join(message_parts) or "蜿門ｼ募庄閭ｽ",
                         "taker_fee_pct": taker_fee_pct,
                         "fee_source": "account" if symbol in fees else "fallback",
                         "min_cost": min_cost,
@@ -395,7 +395,7 @@ class BotRuntime:
     async def start(self, settings: BotSettings) -> None:
         async with self.lock:
             if self.task and not self.task.done():
-                self.log("info", "すでに実行中です")
+                self.log("info", "Already running")
                 return
             config = settings_to_config(settings)
             if config.mode == "live":
@@ -408,7 +408,7 @@ class BotRuntime:
                     "exchange_id": exchange_id,
                     "symbol": symbol,
                     "status": "pending",
-                    "message": "起動待ち",
+                    "message": "Starting",
                 }
                 for exchange_id in config.exchanges
                 for symbol in config.symbols
@@ -419,78 +419,51 @@ class BotRuntime:
             self.stopped_at = None
             self.stop_event = asyncio.Event()
             self.task = asyncio.create_task(self._run(config, settings.auto_execute))
-            self.log("info", f"{config.mode.upper()} モードでスキャナーを開始しました")
+            self.log("info", f"{config.mode.upper()} 繝｢繝ｼ繝峨〒繧ｹ繧ｭ繝｣繝翫・繧帝幕蟋九＠縺ｾ縺励◆")
 
     async def stop(self) -> None:
         async with self.lock:
             if self.stop_event:
                 self.stop_event.set()
-                self.log("info", "停止リクエストを送りました")
+                self.log("info", "蛛懈ｭ｢繝ｪ繧ｯ繧ｨ繧ｹ繝医ｒ騾√ｊ縺ｾ縺励◆")
 
     def _validate_live_config(self, config: Config) -> None:
         if not config.live_trading:
-            raise HTTPException(status_code=400, detail="本番取引は .env の LIVE_TRADING=true が必要です")
+            raise HTTPException(status_code=400, detail="LIVE_TRADING=true is required")
         if config.live_confirm != LIVE_CONFIRM_TEXT:
-            raise HTTPException(status_code=400, detail=f"本番確認欄に {LIVE_CONFIRM_TEXT} を入力してください")
+            raise HTTPException(status_code=400, detail=f"譛ｬ逡ｪ遒ｺ隱肴ｬ・↓ {LIVE_CONFIRM_TEXT} 繧貞・蜉帙＠縺ｦ縺上□縺輔＞")
         missing = []
         for exchange_id in config.exchanges:
             prefix = exchange_id.upper()
             if not os.getenv(f"{prefix}_API_KEY") or not os.getenv(f"{prefix}_SECRET"):
                 missing.append(exchange_id)
         if missing:
-            raise HTTPException(status_code=400, detail=f"APIキー未設定: {', '.join(missing)}")
+            raise HTTPException(status_code=400, detail=f"API繧ｭ繝ｼ譛ｪ險ｭ螳・ {', '.join(missing)}")
 
     async def _run(self, config: Config, auto_execute: bool) -> None:
-        exchanges = []
         futures_exchanges = []
         try:
-            exchanges = await self._prepare_exchanges(config)
             futures_exchanges = await self._prepare_futures_exchanges(config)
-            self.log("ready", f"{', '.join(config.symbols)}: {', '.join(exchange.id for exchange in exchanges)}")
+            if len(futures_exchanges) < 2:
+                raise RuntimeError("Need at least two futures research exchanges")
+            self.log("ready", f"FUTURES research {', '.join(config.symbols)}: {', '.join(futures_exchanges)}")
 
             while self.stop_event and not self.stop_event.is_set():
-                scan_sizes = self._scan_sizes(settings=self.settings, config=config)
-                quote_results = await asyncio.gather(
-                    *[
-                        self._fetch_market_status(exchange, symbol, config, scan_sizes[-1])
-                        for exchange in exchanges
-                        for symbol in config.symbols
-                    ]
-                )
-                valid_quotes = [item["quote"] for item in quote_results if item["quote"] is not None]
-                if config.mode == "demo":
-                    valid_quotes = [self._apply_demo_price_adjustment(quote) for quote in valid_quotes]
-                opportunities = await self._find_optimized_opportunities(
-                    exchanges,
-                    config,
-                    scan_sizes,
-                    valid_quotes,
-                )
-
-                self.quotes = [to_jsonable(asdict(quote)) for quote in valid_quotes]
-                self.market_statuses = [
-                    to_jsonable(self._status_with_demo_adjustment(item["status"], config))
-                    for item in quote_results
-                ]
-                self._record_spread_history(valid_quotes, config)
-                if len(futures_exchanges) >= 2:
-                    await self._record_futures_spread_history(futures_exchanges, config)
-                self.opportunities = [to_jsonable(asdict(item)) for item in opportunities[:50]]
+                await self._record_futures_spread_history(futures_exchanges, config)
+                latest = self.futures_spread_history[-1] if self.futures_spread_history else {"points": []}
+                self.quotes = []
+                self.market_statuses = self.futures_market_statuses
+                self.opportunities = []
                 self.last_tick = datetime.now().astimezone().isoformat()
 
-                if opportunities:
-                    best = opportunities[0]
+                if latest.get("points"):
+                    best = latest["points"][0]
                     self.log(
-                        "hit",
-                        f"{best.symbol} {best.buy_exchange}->{best.sell_exchange} net {best.net_profit_pct:.4f}%",
+                        "futures",
+                        f"{best['symbol']} {best['direction']} spread {Decimal(str(best['spread_pct'])):.4f}%",
                     )
-                    if auto_execute:
-                        await self._execute(best, config, exchanges)
                 else:
-                    self.log("scan", "純利益条件を満たす機会はありません")
-
-                if config.mode == "live":
-                    await self._refresh_balances(exchanges)
+                    self.log("futures", "No futures spread data")
 
                 try:
                     await asyncio.wait_for(self.stop_event.wait(), timeout=config.poll_seconds)
@@ -500,10 +473,8 @@ class BotRuntime:
             self.last_error = f"{type(exc).__name__}: {exc}"
             self.log("error", self.last_error)
         finally:
-            if exchanges:
-                await asyncio.gather(*(exchange.close() for exchange in exchanges), return_exceptions=True)
             self.stopped_at = datetime.now().astimezone().isoformat()
-            self.log("info", "スキャナーを停止しました")
+            self.log("info", "Futures research stopped")
 
     async def _prepare_exchanges(self, config: Config):
         exchanges = [make_exchange(exchange_id, private=config.mode == "live") for exchange_id in config.exchanges]
@@ -535,7 +506,7 @@ class BotRuntime:
                                 "exchange_id": exchange.id,
                                 "symbol": symbol,
                                 "status": "ready",
-                                "message": "市場情報取得済み",
+                                "message": "蟶ょｴ諠・ｱ蜿門ｾ玲ｸ医∩",
                                 "taker_fee_pct": fee,
                                 "fee_source": fee_source,
                             }
@@ -549,14 +520,14 @@ class BotRuntime:
                         symbol: "fallback" for symbol in config.symbols
                     }
                     ready.append(exchange)
-                    self.log("warn", f"{exchange.id}: 市場情報は失敗、直接板取得へフォールバックします: {type(exc).__name__}: {exc}")
+                    self.log("warn", f"{exchange.id}: 蟶ょｴ諠・ｱ縺ｯ螟ｱ謨励∫峩謗･譚ｿ蜿門ｾ励∈繝輔か繝ｼ繝ｫ繝舌ャ繧ｯ縺励∪縺・ {type(exc).__name__}: {exc}")
                     for symbol in config.symbols:
                         self._upsert_market_status(
                             {
                                 "exchange_id": exchange.id,
                                 "symbol": symbol,
                                 "status": "ready",
-                                "message": "手数料は設定値、価格は直接APIで取得",
+                                "message": "Using fallback fee; price uses direct API",
                                 "taker_fee_pct": config.default_taker_fee_pct,
                                 "fee_source": "fallback",
                             }
@@ -832,7 +803,7 @@ class BotRuntime:
         adjusted["bid"] = Decimal(str(status["bid"])) * bid_factor
         adjusted["ask"] = Decimal(str(status["ask"])) * ask_factor
         adjusted["message"] = (
-            f"デモ価格操作 bid {adjustment['bid_adjust_pct']}%, ask {adjustment['ask_adjust_pct']}%"
+            f"繝・Δ萓｡譬ｼ謫堺ｽ・bid {adjustment['bid_adjust_pct']}%, ask {adjustment['ask_adjust_pct']}%"
         )
         return adjusted
 
@@ -903,7 +874,7 @@ class BotRuntime:
                         "exchange_id": exchange.id,
                         "symbol": symbol,
                         "status": "error" if quote_error else "no_quote",
-                        "message": quote_error or "板または流動性が不足",
+                        "message": quote_error or "譚ｿ縺ｾ縺溘・豬∝虚諤ｧ縺御ｸ崎ｶｳ",
                         "taker_fee_pct": fee,
                         "fee_source": fee_source,
                     },
@@ -914,7 +885,7 @@ class BotRuntime:
                     "exchange_id": exchange.id,
                     "symbol": symbol,
                     "status": "ok",
-                    "message": "取得成功",
+                        "message": "Fetched",
                     "bid": quote.bid,
                     "ask": quote.ask,
                     "bid_volume": quote.bid_volume,
@@ -949,14 +920,14 @@ class BotRuntime:
 
         max_live_quote = Decimal(os.getenv("MAX_LIVE_TRADE_QUOTE", "25"))
         if opportunity.quote_amount > max_live_quote:
-            self.log("live", f"本番発注スキップ: quote size {opportunity.quote_amount:.4f} > MAX_LIVE_TRADE_QUOTE {max_live_quote}")
+            self.log("live", f"譛ｬ逡ｪ逋ｺ豕ｨ繧ｹ繧ｭ繝・・: quote size {opportunity.quote_amount:.4f} > MAX_LIVE_TRADE_QUOTE {max_live_quote}")
             return
 
         exchange_by_id = {exchange.id: exchange for exchange in exchanges}
         buy_exchange = exchange_by_id.get(opportunity.buy_exchange)
         sell_exchange = exchange_by_id.get(opportunity.sell_exchange)
         if not buy_exchange or not sell_exchange:
-            self.log("live", "本番発注スキップ: exchange handle not found")
+            self.log("live", "譛ｬ逡ｪ逋ｺ豕ｨ繧ｹ繧ｭ繝・・: exchange handle not found")
             return
 
         try:
@@ -964,7 +935,7 @@ class BotRuntime:
                 buy_exchange.amount_to_precision(opportunity.symbol, float(opportunity.base_amount))
             )
             if amount <= 0:
-                self.log("live", "本番発注スキップ: amount precision rounded to zero")
+                self.log("live", "譛ｬ逡ｪ逋ｺ豕ｨ繧ｹ繧ｭ繝・・: amount precision rounded to zero")
                 return
 
             buy_order, sell_order = await asyncio.gather(
@@ -995,7 +966,7 @@ class BotRuntime:
             )
             append_jsonl(TRADE_LOG_PATH, trade)
         except Exception as exc:
-            self.log("error", f"本番発注失敗: {type(exc).__name__}: {exc}")
+            self.log("error", f"譛ｬ逡ｪ逋ｺ豕ｨ螟ｱ謨・ {type(exc).__name__}: {exc}")
 
     async def _refresh_balances(self, exchanges) -> None:
         balances = []
@@ -1107,7 +1078,7 @@ async def stop():
 @app.post("/api/reset-demo")
 async def reset_demo():
     runtime.demo.reset()
-    runtime.log("info", "デモ口座をリセットしました")
+    runtime.log("info", "繝・Δ蜿｣蠎ｧ繧偵Μ繧ｻ繝・ヨ縺励∪縺励◆")
     return runtime.state()
 
 
