@@ -98,6 +98,7 @@ function settingsFromForm() {
   const data = new FormData(form);
   return {
     exchanges: data.get("exchanges"),
+    futures_exchanges: data.get("futures_exchanges"),
     symbols: data.get("symbols"),
     trade_size_quote: Number(data.get("trade_size_quote")),
     optimize_trade_size: data.get("optimize_trade_size") === "on",

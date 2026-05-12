@@ -47,6 +47,7 @@ load_dotenv(ROOT / ".env")
 
 class BotSettings(BaseModel):
     exchanges: str = Field(default="binance,okx,bitget")
+    futures_exchanges: str = Field(default="binance,hyperliquid")
     symbols: str = Field(default="BTC/USDT,ETH/USDT,SOL/USDT")
     trade_size_quote: float = Field(default=100, gt=0)
     optimize_trade_size: bool = Field(default=True)
@@ -130,6 +131,7 @@ def settings_to_config(settings: BotSettings) -> Config:
 def config_to_settings(config: Config) -> BotSettings:
     return BotSettings(
         exchanges=",".join(config.exchanges),
+        futures_exchanges="binance,hyperliquid",
         symbols=",".join(config.symbols),
         trade_size_quote=float(config.trade_size_quote),
         optimize_trade_size=True,
@@ -569,7 +571,8 @@ class BotRuntime:
             raise
 
     async def _prepare_futures_exchanges(self, config: Config):
-        ready = [exchange_id for exchange_id in config.exchanges if exchange_id in {"binance", "okx", "bitget"}]
+        requested = [item.lower() for item in parse_csv(self.settings.futures_exchanges)]
+        ready = [exchange_id for exchange_id in requested if exchange_id in {"binance", "okx", "bitget", "hyperliquid"}]
         if len(ready) >= 2:
             self.log("ready", f"futures direct API: {', '.join(ready)}")
         else:
@@ -739,6 +742,8 @@ class BotRuntime:
         compact = symbol.replace("/", "").replace("-", "").upper()
         if exchange_id == "okx":
             return symbol.replace("/", "-").upper() + "-SWAP"
+        if exchange_id == "hyperliquid":
+            return symbol.split("/")[0].upper()
         return compact
 
     async def _fetch_direct_futures_orderbook(self, exchange_id: str, symbol: str, limit: int) -> dict[str, Any]:
@@ -753,13 +758,21 @@ class BotRuntime:
             url = f"https://www.okx.com/api/v5/market/books?instId={inst_id}&sz={limit}"
         elif exchange_id == "bitget":
             url = f"https://api.bitget.com/api/v2/mix/market/orderbook?symbol={compact}&productType=USDT-FUTURES&limit={limit}"
+        elif exchange_id == "hyperliquid":
+            url = "https://api.hyperliquid.xyz/info"
         else:
             raise ValueError(f"unsupported futures exchange: {exchange_id}")
 
         async with aiohttp.ClientSession(headers=headers, connector=connector) as session:
-            async with session.get(url, timeout=10) as response:
-                response.raise_for_status()
-                data = await response.json()
+            if exchange_id == "hyperliquid":
+                coin = symbol.split("/")[0].upper()
+                async with session.post(url, json={"type": "l2Book", "coin": coin}, timeout=10) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+            else:
+                async with session.get(url, timeout=10) as response:
+                    response.raise_for_status()
+                    data = await response.json()
 
         if exchange_id == "okx":
             book = (data.get("data") or [{}])[0]
@@ -767,6 +780,11 @@ class BotRuntime:
         if exchange_id == "bitget":
             book = data.get("data") or {}
             return {"bids": book.get("bids", []), "asks": book.get("asks", [])}
+        if exchange_id == "hyperliquid":
+            levels = data.get("levels") or [[], []]
+            bids = [[level.get("px"), level.get("sz")] for level in levels[0][:limit]]
+            asks = [[level.get("px"), level.get("sz")] for level in levels[1][:limit]]
+            return {"bids": bids, "asks": asks}
         return {"bids": data.get("bids", []), "asks": data.get("asks", [])}
 
     def set_demo_price_adjustment(self, request: DemoPriceAdjustment) -> None:
