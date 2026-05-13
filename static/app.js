@@ -245,13 +245,14 @@ function renderRelativeTrades(trades) {
         <td>${trade.timestamp ? new Date(trade.timestamp).toLocaleTimeString() : "-"}</td>
         <td>${escapeHtml(trade.long_symbol || "-")}</td>
         <td>${escapeHtml((trade.short_symbols || []).join(", "))}</td>
+        <td>${escapeHtml(trade.status || "-")}</td>
         <td>${numberText(trade.relative_pct)}%</td>
         <td class="${pnl >= 0 ? "positive" : "negative"}">${pnl >= 0 ? "+" : ""}${moneyText(pnl)}</td>
       </tr>
     `;
   }).join("");
   if (!relativeTradesEl.innerHTML) {
-    relativeTradesEl.innerHTML = `<tr><td colspan="5" class="empty-cell">まだ結果はありません</td></tr>`;
+    relativeTradesEl.innerHTML = `<tr><td colspan="6" class="empty-cell">まだ結果はありません</td></tr>`;
   }
 }
 

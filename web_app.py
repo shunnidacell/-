@@ -1460,7 +1460,7 @@ class BotRuntime:
         self._refresh_relative_pnl()
         return to_jsonable(position)
 
-    def close_relative_position(self, position_id: str) -> None:
+    def close_relative_position(self, position_id: str, status: str = "manual_close") -> None:
         position = self.relative_positions.get(position_id)
         if not position:
             raise HTTPException(status_code=404, detail="relative position not found")
@@ -1473,13 +1473,14 @@ class BotRuntime:
             "quote_amount": position["quote_amount"],
             "relative_pct": position.get("last_relative_pct", Decimal("0")),
             "profit_quote": profit,
-            "status": "manual_close",
+            "status": status,
         }
         self.relative_closed_trades.appendleft(to_jsonable(trade))
+        append_jsonl(TRADE_LOG_PATH, trade)
         self.relative_realized_profit += profit
         self.relative_positions.pop(position_id, None)
         self._refresh_relative_pnl(close_on_threshold=False)
-        self.log("relative", f"REL PAPER close {position['long_symbol']}: pnl {profit:.4f}")
+        self.log("relative", f"REL PAPER {status} {position['long_symbol']}: pnl {profit:.4f}")
 
     def _update_relative_auto_strategy(self) -> None:
         if self.relative_positions or len(self.relative_history) < 2:
@@ -1502,7 +1503,7 @@ class BotRuntime:
         unrealized = Decimal("0")
         take_profit = Decimal(os.getenv("RELATIVE_TAKE_PROFIT_PCT", "2.0"))
         stop_loss = Decimal(os.getenv("RELATIVE_STOP_LOSS_PCT", "-1.5"))
-        to_close = []
+        to_close: list[tuple[str, str]] = []
         for position_id, position in self.relative_positions.items():
             long_symbol = position["long_symbol"]
             if long_symbol not in latest_mids:
@@ -1526,11 +1527,13 @@ class BotRuntime:
             position["last_relative_pct"] = relative_pct
             position["unrealized_profit"] = profit
             unrealized += profit
-            if close_on_threshold and (relative_pct >= take_profit or relative_pct <= stop_loss):
-                to_close.append(position_id)
+            if close_on_threshold and relative_pct >= take_profit:
+                to_close.append((position_id, "take_profit"))
+            elif close_on_threshold and relative_pct <= stop_loss:
+                to_close.append((position_id, "stop_loss"))
         self.relative_unrealized_profit = unrealized
-        for position_id in to_close:
-            self.close_relative_position(position_id)
+        for position_id, status in to_close:
+            self.close_relative_position(position_id, status=status)
 
     def _update_futures_paper_strategy(self, points: list[dict[str, Any]]) -> None:
         entry_threshold = Decimal(os.getenv("FUTURES_PAPER_ENTRY_SPREAD_PCT", "0.5"))
