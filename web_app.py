@@ -1138,6 +1138,7 @@ class BotRuntime:
     def _update_futures_paper_strategy(self, points: list[dict[str, Any]]) -> None:
         entry_threshold = Decimal(os.getenv("FUTURES_ENTRY_SPREAD_PCT", "1.0"))
         add_threshold = Decimal(os.getenv("FUTURES_ADD_SPREAD_PCT", "1.5"))
+        second_add_threshold = Decimal(os.getenv("FUTURES_SECOND_ADD_SPREAD_PCT", "2.0"))
         take_profit_threshold = Decimal(os.getenv("FUTURES_EXIT_SPREAD_PCT", "0.2"))
         compromise_minutes = Decimal(os.getenv("FUTURES_COMPROMISE_MINUTES", "60"))
         compromise_threshold = Decimal(os.getenv("FUTURES_COMPROMISE_EXIT_SPREAD_PCT", "0.5"))
@@ -1167,14 +1168,23 @@ class BotRuntime:
 
             position["last_spread_pct"] = spread
             held_minutes = Decimal(str((now - position["opened_at"]).total_seconds() / 60))
-            if position["add_count"] == 0 and spread >= add_threshold:
+            next_add_threshold = None
+            if position["add_count"] == 0:
+                next_add_threshold = add_threshold
+            elif position["add_count"] == 1:
+                next_add_threshold = second_add_threshold
+
+            if next_add_threshold is not None and spread >= next_add_threshold:
                 old_amount = Decimal(str(position["quote_amount"]))
                 old_entry = Decimal(str(position["entry_spread_pct"]))
                 new_amount = old_amount + quote_amount
                 position["entry_spread_pct"] = ((old_entry * old_amount) + (spread * quote_amount)) / new_amount
                 position["quote_amount"] = new_amount
                 position["add_count"] += 1
-                self.log("paper", f"FUTURES PAPER add {symbol}: {spread:.4f}% avg {position['entry_spread_pct']:.4f}%")
+                self.log(
+                    "paper",
+                    f"FUTURES PAPER add{position['add_count']} {symbol}: {spread:.4f}% avg {position['entry_spread_pct']:.4f}%",
+                )
 
             should_take_profit = spread <= take_profit_threshold
             should_compromise = held_minutes >= compromise_minutes and spread <= compromise_threshold
