@@ -442,6 +442,28 @@ select:focus {
   background: var(--danger);
 }
 
+.relative-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(120px, 0.7fr) auto auto;
+  gap: 12px;
+  align-items: end;
+  margin-bottom: 16px;
+}
+
+.relative-controls label {
+  margin-bottom: 0;
+}
+
+.compact-grid {
+  margin-bottom: 16px;
+}
+
+.mini-button {
+  min-height: 32px;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
 .dashboard-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -843,6 +865,10 @@ td.detail {
   .load-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .relative-controls {
+    grid-template-columns: 1fr 1fr;
+  }
 }
 
 @media (max-width: 720px) {
@@ -860,6 +886,7 @@ td.detail {
 
   .metrics,
   .load-grid,
+  .relative-controls,
   .form-grid,
   .button-grid,
   .account-grid {

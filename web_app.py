@@ -93,6 +93,12 @@ class FuturesPaperPosition(BaseModel):
     last_spread_pct: float
 
 
+class RelativeTradeRequest(BaseModel):
+    symbol: str = Field(default="")
+    mode: str = Field(default="manual")
+    quote_amount: float = Field(default=10, gt=0)
+
+
 def parse_csv(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
@@ -513,6 +519,12 @@ class BotRuntime:
         self.futures_closed_trades: deque[dict[str, Any]] = deque(maxlen=300)
         self.futures_unrealized_profit = Decimal("0")
         self.futures_realized_profit = Decimal("0")
+        self.relative_history: deque[dict[str, Any]] = deque(maxlen=240)
+        self.relative_rankings: dict[str, Any] = {}
+        self.relative_positions: dict[str, dict[str, Any]] = {}
+        self.relative_closed_trades: deque[dict[str, Any]] = deque(maxlen=200)
+        self.relative_realized_profit = Decimal("0")
+        self.relative_unrealized_profit = Decimal("0")
         self.demo = DemoBroker()
         self.settings = load_saved_settings() or config_to_settings(load_config())
         self.last_error: str | None = None
@@ -642,6 +654,7 @@ class BotRuntime:
                     )
                     if auto_execute:
                         self._update_futures_paper_strategy(latest["points"])
+                        self._update_relative_auto_strategy()
                 else:
                     self.log("futures", "No futures spread data")
 
@@ -975,6 +988,8 @@ class BotRuntime:
         )
         self.futures_spread_history.append(item)
         append_jsonl(FUTURES_SPREAD_LOG_PATH, item)
+        self._record_relative_snapshot(quotes)
+        self._refresh_relative_pnl()
         elapsed = (datetime.now(timezone.utc) - started).total_seconds()
         self.futures_perf = {
             "last_scan_seconds": Decimal(str(round(elapsed, 3))),
@@ -1333,6 +1348,190 @@ class BotRuntime:
         one_sided_buffer = Decimal(os.getenv("FUTURES_ONE_SIDED_RISK_BUFFER_PCT", "0.03"))
         return fees + slippage + one_sided_buffer
 
+    def _record_relative_snapshot(self, quotes: list[dict[str, Any]]) -> None:
+        by_symbol: dict[str, list[Decimal]] = {}
+        for quote in quotes:
+            by_symbol.setdefault(quote["symbol"], []).append(Decimal(str(quote["mid"])))
+        mids = {
+            symbol: sum(values) / Decimal(str(len(values)))
+            for symbol, values in by_symbol.items()
+            if values
+        }
+        if not mids:
+            return
+        snapshot = {"timestamp": datetime.now(timezone.utc), "mids": mids}
+        self.relative_history.append(to_jsonable(snapshot))
+        self.relative_rankings = self._build_relative_rankings()
+
+    def _relative_returns(self, lookback_minutes: int = 60) -> list[dict[str, Any]]:
+        if len(self.relative_history) < 2:
+            return []
+        latest = self.relative_history[-1]
+        latest_time = datetime.fromisoformat(latest["timestamp"])
+        target_age = lookback_minutes * 60
+        base = self.relative_history[0]
+        for item in reversed(self.relative_history):
+            item_time = datetime.fromisoformat(item["timestamp"])
+            if (latest_time - item_time).total_seconds() >= target_age:
+                base = item
+                break
+        rows = []
+        latest_mids = latest.get("mids", {})
+        base_mids = base.get("mids", {})
+        for symbol, latest_mid in latest_mids.items():
+            old_mid = base_mids.get(symbol)
+            if old_mid is None:
+                continue
+            old = Decimal(str(old_mid))
+            new = Decimal(str(latest_mid))
+            if old <= 0:
+                continue
+            rows.append({"symbol": symbol, "return_pct": ((new - old) / old) * Decimal("100")})
+        return sorted(rows, key=lambda item: item["return_pct"], reverse=True)
+
+    def _build_relative_rankings(self) -> dict[str, Any]:
+        rows_1h = self._relative_returns(60)
+        rows_4h = self._relative_returns(240)
+        row4_by_symbol = {row["symbol"]: row["return_pct"] for row in rows_4h}
+        combined = []
+        for row in rows_1h:
+            combined.append(
+                {
+                    "symbol": row["symbol"],
+                    "return_1h_pct": row["return_pct"],
+                    "return_4h_pct": row4_by_symbol.get(row["symbol"], row["return_pct"]),
+                }
+            )
+        combined.sort(
+            key=lambda item: (Decimal(str(item["return_1h_pct"])) * Decimal("0.65"))
+            + (Decimal(str(item["return_4h_pct"])) * Decimal("0.35")),
+            reverse=True,
+        )
+        return to_jsonable(
+            {
+                "updated_at": datetime.now(timezone.utc),
+                "strong": combined[:12],
+                "weak": list(reversed(combined[-12:])),
+            }
+        )
+
+    def _select_relative_short_basket(self, long_symbol: str, count: int = 4) -> list[dict[str, Any]]:
+        weak = self.relative_rankings.get("weak", [])
+        basket = [item for item in weak if item.get("symbol") != long_symbol]
+        return basket[:count]
+
+    def open_relative_position(self, request: RelativeTradeRequest) -> dict[str, Any]:
+        rankings = self._build_relative_rankings()
+        self.relative_rankings = rankings
+        strong = rankings.get("strong", [])
+        long_symbol = request.symbol.strip().upper()
+        if request.mode == "auto" or not long_symbol:
+            if not strong:
+                raise HTTPException(status_code=400, detail="relative ranking is not ready yet")
+            long_symbol = strong[0]["symbol"]
+        if "/" not in long_symbol:
+            long_symbol = f"{long_symbol}/USDT"
+        basket = self._select_relative_short_basket(long_symbol)
+        if not basket:
+            raise HTTPException(status_code=400, detail="short basket is not ready yet")
+        latest_mids = self.relative_history[-1]["mids"] if self.relative_history else {}
+        if long_symbol not in latest_mids:
+            raise HTTPException(status_code=400, detail=f"{long_symbol} price is not ready")
+        short_symbols = [item["symbol"] for item in basket if item["symbol"] in latest_mids]
+        if not short_symbols:
+            raise HTTPException(status_code=400, detail="short basket prices are not ready")
+        key = f"{long_symbol}|{','.join(short_symbols)}"
+        now = datetime.now(timezone.utc)
+        quote_amount = Decimal(str(request.quote_amount))
+        position = {
+            "id": key,
+            "mode": request.mode,
+            "long_symbol": long_symbol,
+            "short_symbols": short_symbols,
+            "quote_amount": quote_amount,
+            "opened_at": now,
+            "entry_long_price": Decimal(str(latest_mids[long_symbol])),
+            "entry_short_prices": {symbol: Decimal(str(latest_mids[symbol])) for symbol in short_symbols},
+            "last_relative_pct": Decimal("0"),
+            "unrealized_profit": Decimal("0"),
+        }
+        self.relative_positions[key] = position
+        self.log("relative", f"REL PAPER entry long {long_symbol} / short {', '.join(short_symbols)}")
+        self._refresh_relative_pnl()
+        return to_jsonable(position)
+
+    def close_relative_position(self, position_id: str) -> None:
+        position = self.relative_positions.get(position_id)
+        if not position:
+            raise HTTPException(status_code=404, detail="relative position not found")
+        profit = Decimal(str(position.get("unrealized_profit", "0")))
+        trade = {
+            "timestamp": datetime.now(timezone.utc),
+            "mode": "relative_paper",
+            "long_symbol": position["long_symbol"],
+            "short_symbols": position["short_symbols"],
+            "quote_amount": position["quote_amount"],
+            "relative_pct": position.get("last_relative_pct", Decimal("0")),
+            "profit_quote": profit,
+            "status": "manual_close",
+        }
+        self.relative_closed_trades.appendleft(to_jsonable(trade))
+        self.relative_realized_profit += profit
+        self.relative_positions.pop(position_id, None)
+        self._refresh_relative_pnl(close_on_threshold=False)
+        self.log("relative", f"REL PAPER close {position['long_symbol']}: pnl {profit:.4f}")
+
+    def _update_relative_auto_strategy(self) -> None:
+        if self.relative_positions or len(self.relative_history) < 2:
+            return
+        strong = self.relative_rankings.get("strong", [])
+        weak = self.relative_rankings.get("weak", [])
+        if not strong or len(weak) < 3:
+            return
+        leader = strong[0]
+        weak_avg = sum(Decimal(str(item["return_1h_pct"])) for item in weak[:4]) / Decimal("4")
+        leader_ret = Decimal(str(leader["return_1h_pct"]))
+        trigger = Decimal(os.getenv("RELATIVE_AUTO_EDGE_PCT", "3.0"))
+        if leader_ret - weak_avg >= trigger:
+            self.open_relative_position(
+                RelativeTradeRequest(symbol=leader["symbol"], mode="auto", quote_amount=float(os.getenv("RELATIVE_PAPER_QUOTE", "10")))
+            )
+
+    def _refresh_relative_pnl(self, close_on_threshold: bool = True) -> None:
+        latest_mids = self.relative_history[-1]["mids"] if self.relative_history else {}
+        unrealized = Decimal("0")
+        take_profit = Decimal(os.getenv("RELATIVE_TAKE_PROFIT_PCT", "2.0"))
+        stop_loss = Decimal(os.getenv("RELATIVE_STOP_LOSS_PCT", "-1.5"))
+        to_close = []
+        for position_id, position in self.relative_positions.items():
+            long_symbol = position["long_symbol"]
+            if long_symbol not in latest_mids:
+                continue
+            long_entry = Decimal(str(position["entry_long_price"]))
+            long_now = Decimal(str(latest_mids[long_symbol]))
+            long_ret = ((long_now - long_entry) / long_entry) * Decimal("100")
+            short_returns = []
+            for symbol, entry_price in position["entry_short_prices"].items():
+                if symbol not in latest_mids:
+                    continue
+                entry = Decimal(str(entry_price))
+                now = Decimal(str(latest_mids[symbol]))
+                short_returns.append(((now - entry) / entry) * Decimal("100"))
+            if not short_returns:
+                continue
+            short_avg = sum(short_returns) / Decimal(str(len(short_returns)))
+            relative_pct = long_ret - short_avg
+            amount = Decimal(str(position["quote_amount"]))
+            profit = amount * (relative_pct / Decimal("100"))
+            position["last_relative_pct"] = relative_pct
+            position["unrealized_profit"] = profit
+            unrealized += profit
+            if close_on_threshold and (relative_pct >= take_profit or relative_pct <= stop_loss):
+                to_close.append(position_id)
+        self.relative_unrealized_profit = unrealized
+        for position_id in to_close:
+            self.close_relative_position(position_id)
+
     def _update_futures_paper_strategy(self, points: list[dict[str, Any]]) -> None:
         entry_threshold = Decimal(os.getenv("FUTURES_PAPER_ENTRY_SPREAD_PCT", "0.5"))
         add_thresholds = [
@@ -1490,6 +1689,16 @@ class BotRuntime:
                 }
             ),
             "futures_perf": to_jsonable(self.futures_perf),
+            "relative_rankings": self.relative_rankings,
+            "relative_positions": to_jsonable(list(self.relative_positions.values())),
+            "relative_closed_trades": list(self.relative_closed_trades),
+            "relative_pnl": to_jsonable(
+                {
+                    "realized": self.relative_realized_profit,
+                    "unrealized": self.relative_unrealized_profit,
+                    "total": self.relative_realized_profit + self.relative_unrealized_profit,
+                }
+            ),
             "balances": self.balances,
             "preflight_results": self.preflight_results,
             "live_ready": os.getenv("LIVE_TRADING", "false").strip().lower() == "true",
@@ -1596,4 +1805,16 @@ async def preflight(request: PreflightRequest):
         Decimal(str(runtime.settings.default_taker_fee_pct)),
     )
     runtime.log("info", "Preflight check completed")
+    return runtime.state()
+
+
+@app.post("/api/relative/open")
+async def relative_open(request: RelativeTradeRequest):
+    runtime.open_relative_position(request)
+    return runtime.state()
+
+
+@app.post("/api/relative/close/{position_id:path}")
+async def relative_close(position_id: str):
+    runtime.close_relative_position(position_id)
     return runtime.state()

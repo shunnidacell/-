@@ -148,6 +148,37 @@
 
         <section class="panel">
           <div class="section-title">
+            <h2>相対強弱デモ</h2>
+            <span>選んだ銘柄をロング / 弱い銘柄を分散ショート</span>
+          </div>
+          <div class="relative-controls">
+            <label>
+              <span>強いと思う銘柄</span>
+              <input id="relative-symbol" placeholder="例: INJ/USDT" />
+            </label>
+            <label>
+              <span>紙トレード額 USDT</span>
+              <input id="relative-amount" type="number" min="1" step="1" value="10" />
+            </label>
+            <button type="button" id="relative-open-manual" class="primary">選んだ銘柄で開始</button>
+            <button type="button" id="relative-open-auto">自動で開始</button>
+          </div>
+          <div class="dashboard-grid compact-grid">
+            <div>
+              <h3 class="subhead">強い銘柄</h3>
+              <div id="relative-strong" class="ranking-list empty">履歴が貯まると表示します</div>
+            </div>
+            <div>
+              <h3 class="subhead">弱い銘柄</h3>
+              <div id="relative-weak" class="ranking-list empty">履歴が貯まると表示します</div>
+            </div>
+          </div>
+          <h3 class="subhead">相対強弱 建玉</h3>
+          <div id="relative-positions" class="ranking-list empty">現在の建玉はありません</div>
+        </section>
+
+        <section class="panel">
+          <div class="section-title">
             <h2>1%超えイベント検証</h2>
             <span>コスト込み / 10 USDT基準</span>
           </div>

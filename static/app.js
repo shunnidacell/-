@@ -28,6 +28,13 @@ const scanSuccessEl = document.querySelector("#scan-success");
 const scanNoQuoteEl = document.querySelector("#scan-noquote");
 const scanErrorEl = document.querySelector("#scan-error");
 const loadBarFillEl = document.querySelector("#load-bar-fill");
+const relativeSymbolEl = document.querySelector("#relative-symbol");
+const relativeAmountEl = document.querySelector("#relative-amount");
+const relativeOpenManualButton = document.querySelector("#relative-open-manual");
+const relativeOpenAutoButton = document.querySelector("#relative-open-auto");
+const relativeStrongEl = document.querySelector("#relative-strong");
+const relativeWeakEl = document.querySelector("#relative-weak");
+const relativePositionsEl = document.querySelector("#relative-positions");
 
 let settingsApplied = false;
 
@@ -181,6 +188,53 @@ function renderPositions(positions) {
   }).join("");
 }
 
+function renderRelativeList(target, rows, emptyText) {
+  if (!target) return;
+  const items = (rows || []).slice(0, 8);
+  if (!items.length) {
+    target.className = "ranking-list empty";
+    target.textContent = emptyText;
+    return;
+  }
+  target.className = "ranking-list";
+  target.innerHTML = items.map((item) => `
+    <article class="ranking-row">
+      <div>
+        <strong>${escapeHtml(item.symbol)}</strong>
+        <span>1h ${numberText(item.return_1h_pct)}% / 4h ${numberText(item.return_4h_pct)}%</span>
+      </div>
+      <div class="rank-net ${Number(item.return_1h_pct) >= 0 ? "positive" : "negative"}">${numberText(item.return_1h_pct)}%</div>
+    </article>
+  `).join("");
+}
+
+function renderRelativePositions(positions) {
+  if (!relativePositionsEl) return;
+  if (!positions || !positions.length) {
+    relativePositionsEl.className = "ranking-list empty";
+    relativePositionsEl.textContent = "現在の建玉はありません";
+    return;
+  }
+  relativePositionsEl.className = "ranking-list";
+  relativePositionsEl.innerHTML = positions.map((position) => {
+    const pnl = Number(position.unrealized_profit || 0);
+    return `
+      <article class="ranking-row">
+        <div>
+          <strong>Long ${escapeHtml(position.long_symbol)}</strong>
+          <span>Short ${escapeHtml((position.short_symbols || []).join(", "))}</span>
+        </div>
+        <div>
+          <span>Relative ${numberText(position.last_relative_pct)}%</span>
+          <span>${moneyText(position.quote_amount)} USDT / ${escapeHtml(position.mode || "manual")}</span>
+        </div>
+        <div class="rank-net ${pnl >= 0 ? "positive" : "negative"}">${pnl >= 0 ? "+" : ""}${moneyText(pnl)}</div>
+        <button type="button" class="mini-button relative-close" data-position-id="${escapeHtml(position.id)}">決済</button>
+      </article>
+    `;
+  }).join("");
+}
+
 function renderState(state) {
   const marketStatuses = state.market_statuses || [];
   const latestFutures = (state.futures_spread_history || []).at(-1);
@@ -235,6 +289,9 @@ function renderState(state) {
   renderSummary(points);
   renderPointList(futuresRankingEl, points, "開始後に表示します", 16);
   renderPositions(state.futures_positions || []);
+  renderRelativeList(relativeStrongEl, state.relative_rankings?.strong || [], "履歴が貯まると表示します");
+  renderRelativeList(relativeWeakEl, state.relative_rankings?.weak || [], "履歴が貯まると表示します");
+  renderRelativePositions(state.relative_positions || []);
 
   tradesEl.innerHTML = (state.trades || []).map((trade) => `
     <tr>
@@ -321,6 +378,32 @@ saveSettingsButton.addEventListener("click", async () => {
 
 resetDemoButton.addEventListener("click", async () => {
   const response = await fetch("/api/reset-demo", { method: "POST" });
+  renderState(await response.json());
+});
+
+relativeOpenManualButton?.addEventListener("click", async () => {
+  const state = await postJson("/api/relative/open", {
+    symbol: relativeSymbolEl.value,
+    mode: "manual",
+    quote_amount: Number(relativeAmountEl.value || 10),
+  });
+  if (state) renderState(state);
+});
+
+relativeOpenAutoButton?.addEventListener("click", async () => {
+  const state = await postJson("/api/relative/open", {
+    symbol: "",
+    mode: "auto",
+    quote_amount: Number(relativeAmountEl.value || 10),
+  });
+  if (state) renderState(state);
+});
+
+relativePositionsEl?.addEventListener("click", async (event) => {
+  const button = event.target.closest(".relative-close");
+  if (!button) return;
+  const id = encodeURIComponent(button.dataset.positionId || "");
+  const response = await fetch(`/api/relative/close/${id}`, { method: "POST" });
   renderState(await response.json());
 });
 
