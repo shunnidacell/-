@@ -266,13 +266,16 @@ function renderFuturesResearch(history) {
     return;
   }
   futuresSpreadResearchEl.className = "ranking-list";
-  futuresSpreadResearchEl.innerHTML = points.map((point) => `
-    <article class="ranking-row ${Number(point.spread_pct) >= 0.2 ? "positive-rank" : ""}">
+  futuresSpreadResearchEl.innerHTML = points.map((point) => {
+    const netSpread = Number(point.net_spread_pct ?? point.spread_pct);
+    return `
+    <article class="ranking-row ${netSpread >= 0.2 ? "positive-rank" : ""}">
       <div><strong>${escapeHtml(point.symbol)}</strong><span>${escapeHtml(point.direction || "")}</span></div>
-      <div><span>Low ${numberText(point.low_mid, 8)}</span><span>High ${numberText(point.high_mid, 8)}</span></div>
-      <div class="rank-net ${Number(point.spread_pct) >= 0.2 ? "positive" : ""}">${numberText(point.spread_pct)}%</div>
+      <div><span>Gross ${numberText(point.spread_pct)}%</span><span>Cost ${numberText(point.round_trip_cost_pct)}% / Cap ${moneyText(point.capacity_quote)}</span></div>
+      <div class="rank-net ${netSpread >= 0.2 ? "positive" : ""}">${numberText(netSpread)}%</div>
     </article>
-  `).join("");
+  `;
+  }).join("");
 }
 
 function renderState(state) {
@@ -298,7 +301,7 @@ function renderState(state) {
   const futuresPoints = latestFutures?.points || [];
   marketCountEl.textContent = marketStatuses.length;
   opportunityCountEl.textContent = futuresPoints.length;
-  bestProfitEl.textContent = futuresPoints[0] ? `${numberText(futuresPoints[0].spread_pct)}%` : "-";
+  bestProfitEl.textContent = futuresPoints[0] ? `${numberText(futuresPoints[0].net_spread_pct ?? futuresPoints[0].spread_pct)}%` : "-";
   demoProfitEl.textContent = moneyText(portfolio.realized_profit || 0);
   demoProfitEl.classList.toggle("positive", Number(portfolio.realized_profit || 0) >= 0);
   demoCashEl.textContent = `Cash ${moneyText(portfolio.cash || 0)}`;
@@ -323,9 +326,10 @@ function renderState(state) {
     oppsEl.textContent = state.last_error || "開始後に先物価格差を表示します";
   } else {
     oppsEl.className = "opportunity-list";
-    const maxProfit = Math.max(...futuresPoints.map((item) => Number(item.spread_pct)));
+    const maxProfit = Math.max(...futuresPoints.map((item) => Number(item.net_spread_pct ?? item.spread_pct)));
     oppsEl.innerHTML = futuresPoints.slice(0, 8).map((item) => {
-      const width = Math.max(8, Math.min(100, maxProfit > 0 ? (Number(item.spread_pct) / maxProfit) * 100 : 8));
+      const netSpread = Number(item.net_spread_pct ?? item.spread_pct);
+      const width = Math.max(8, Math.min(100, maxProfit > 0 ? (netSpread / maxProfit) * 100 : 8));
       return `
         <article class="opportunity">
           <div>
@@ -334,9 +338,9 @@ function renderState(state) {
           </div>
           <div>
             <div class="profit-bar"><div style="width:${width}%"></div></div>
-            <div class="muted">${escapeHtml(item.direction || "")}</div>
+            <div class="muted">Gross ${numberText(item.spread_pct)}% / Cost ${numberText(item.round_trip_cost_pct)}% / Cap ${moneyText(item.capacity_quote)}</div>
           </div>
-          <div class="profit-number">${numberText(item.spread_pct)}%</div>
+          <div class="profit-number">${numberText(netSpread)}%</div>
         </article>
       `;
     }).join("");

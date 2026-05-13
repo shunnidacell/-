@@ -492,7 +492,7 @@ class BotRuntime:
                     best = latest["points"][0]
                     self.log(
                         "futures",
-                        f"{best['symbol']} {best['direction']} spread {Decimal(str(best['spread_pct'])):.4f}%",
+                        f"{best['symbol']} {best['direction']} gross {Decimal(str(best['spread_pct'])):.4f}% net {Decimal(str(best.get('net_spread_pct') or 0)):.4f}%",
                     )
                     if auto_execute:
                         self._update_futures_paper_strategy(latest["points"])
@@ -737,6 +737,7 @@ class BotRuntime:
             by_symbol.setdefault(quote["symbol"], []).append(quote)
 
         points = []
+        quote_amount = Decimal(os.getenv("FUTURES_PAPER_QUOTE", "10"))
         for symbol, items in by_symbol.items():
             if len(items) < 2:
                 continue
@@ -750,6 +751,18 @@ class BotRuntime:
                 continue
             low, high = max(pairs, key=lambda pair: pair[1]["mid"] - pair[0]["mid"])
             spread_pct = ((high["mid"] - low["mid"]) / low["mid"]) * Decimal("100")
+            long_entry = self._weighted_futures_price(low["asks"], quote_amount)
+            short_entry = self._weighted_futures_price(high["bids"], quote_amount)
+            executable = long_entry is not None and short_entry is not None
+            executable_spread_pct = None
+            net_spread_pct = None
+            cost_pct = self._futures_round_trip_cost_pct(low["exchange_id"], high["exchange_id"], config)
+            capacity_quote = min(Decimal(str(low.get("ask_capacity_quote", "0"))), Decimal(str(high.get("bid_capacity_quote", "0"))))
+            if executable:
+                long_price, _ = long_entry
+                short_price, _ = short_entry
+                executable_spread_pct = ((short_price - long_price) / long_price) * Decimal("100")
+                net_spread_pct = executable_spread_pct - cost_pct
             points.append(
                 {
                     "symbol": symbol,
@@ -758,6 +771,11 @@ class BotRuntime:
                     "low_mid": low["mid"],
                     "high_mid": high["mid"],
                     "spread_pct": spread_pct,
+                    "executable_spread_pct": executable_spread_pct,
+                    "net_spread_pct": net_spread_pct,
+                    "round_trip_cost_pct": cost_pct,
+                    "capacity_quote": capacity_quote,
+                    "is_executable": executable,
                     "direction": f"long {low['exchange_id']} / short {high['exchange_id']}",
                 }
             )
@@ -765,7 +783,11 @@ class BotRuntime:
         item = to_jsonable(
             {
                 "timestamp": datetime.now(timezone.utc),
-                "points": sorted(points, key=lambda point: Decimal(str(point["spread_pct"])), reverse=True),
+                "points": sorted(
+                    points,
+                    key=lambda point: Decimal(str(point.get("net_spread_pct") or point["spread_pct"])),
+                    reverse=True,
+                ),
             }
         )
         self.futures_spread_history.append(item)
@@ -794,6 +816,10 @@ class BotRuntime:
                 "bid": bid,
                 "ask": ask,
                 "mid": (bid + ask) / Decimal("2"),
+                "bids": bids,
+                "asks": asks,
+                "bid_capacity_quote": self._book_capacity_quote(bids),
+                "ask_capacity_quote": self._book_capacity_quote(asks),
                 "timestamp": datetime.now(timezone.utc),
             }
         except Exception as exc:
@@ -1064,6 +1090,51 @@ class BotRuntime:
         except Exception as exc:
             self.log("error", f"譛ｬ逡ｪ逋ｺ豕ｨ螟ｱ謨・ {type(exc).__name__}: {exc}")
 
+    def _book_capacity_quote(self, levels: list) -> Decimal:
+        total = Decimal("0")
+        for price_raw, size_raw, *_ in levels:
+            try:
+                price = Decimal(str(price_raw))
+                size = Decimal(str(size_raw))
+            except Exception:
+                continue
+            if price > 0 and size > 0:
+                total += price * size
+        return total
+
+    def _weighted_futures_price(self, levels: list, quote_amount: Decimal) -> tuple[Decimal, Decimal] | None:
+        remaining = quote_amount
+        total_quote = Decimal("0")
+        total_base = Decimal("0")
+        for price_raw, size_raw, *_ in levels:
+            try:
+                price = Decimal(str(price_raw))
+                size = Decimal(str(size_raw))
+            except Exception:
+                continue
+            if price <= 0 or size <= 0:
+                continue
+            level_quote = price * size
+            use_quote = min(remaining, level_quote)
+            total_quote += use_quote
+            total_base += use_quote / price
+            remaining -= use_quote
+            if remaining <= 0:
+                break
+        if total_base <= 0 or total_quote < quote_amount:
+            return None
+        return total_quote / total_base, total_base
+
+    def _futures_taker_fee_pct(self, exchange_id: str) -> Decimal:
+        defaults = {"binance": "0.05", "hyperliquid": "0.045", "okx": "0.05", "bitget": "0.06"}
+        return Decimal(os.getenv(f"FUTURES_FEE_{exchange_id.upper()}_PCT", defaults.get(exchange_id, "0.06")))
+
+    def _futures_round_trip_cost_pct(self, long_exchange: str, short_exchange: str, config: Config) -> Decimal:
+        fees = (self._futures_taker_fee_pct(long_exchange) + self._futures_taker_fee_pct(short_exchange)) * Decimal("2")
+        slippage = config.slippage_pct * Decimal("4")
+        one_sided_buffer = Decimal(os.getenv("FUTURES_ONE_SIDED_RISK_BUFFER_PCT", "0.03"))
+        return fees + slippage + one_sided_buffer
+
     def _update_futures_paper_strategy(self, points: list[dict[str, Any]]) -> None:
         entry_threshold = Decimal(os.getenv("FUTURES_ENTRY_SPREAD_PCT", "1.0"))
         add_threshold = Decimal(os.getenv("FUTURES_ADD_SPREAD_PCT", "1.5"))
@@ -1075,7 +1146,9 @@ class BotRuntime:
 
         for point in points:
             symbol = point["symbol"]
-            spread = Decimal(str(point["spread_pct"]))
+            if not point.get("is_executable"):
+                continue
+            spread = Decimal(str(point.get("net_spread_pct") or point["spread_pct"]))
             position = self.futures_positions.get(symbol)
 
             if position is None:
