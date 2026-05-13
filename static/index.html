@@ -3,14 +3,14 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Crypto Arbitrage Console</title>
+    <title>Futures Spread Research</title>
     <link rel="stylesheet" href="/static/styles.css" />
   </head>
   <body>
     <header class="app-header">
       <div>
-        <p class="eyebrow">Real-time arbitrage console</p>
-        <h1>Crypto Arbitrage Console</h1>
+        <p class="eyebrow">Binance Futures x Hyperliquid</p>
+        <h1>Futures Spread Research</h1>
       </div>
       <div class="header-actions">
         <div class="status" id="status">停止中</div>
@@ -18,37 +18,32 @@
       </div>
     </header>
 
-    <div id="run-notice" class="run-notice stopped">停止中: 価格監視と自動デモ取引は止まっています</div>
+    <div id="run-notice" class="run-notice stopped">停止中: 先物価格差の記録は止まっています</div>
 
     <main class="app-shell">
       <aside class="sidebar">
         <section class="panel control-panel">
           <div class="section-title">
-            <h2>運用設定</h2>
-            <span>保存して開始できます</span>
+            <h2>監視設定</h2>
+            <span>先物デモ専用</span>
           </div>
           <form id="settings-form">
-            <label>
-              <span>モード</span>
-              <select name="mode" id="mode-select">
-                <option value="demo">デモ取引</option>
-                <option value="live">本番取引</option>
-              </select>
-            </label>
-
-            <div class="check-stack">
-              <label class="checkline">
-                <input name="auto_execute" type="checkbox" />
-                <span>機会検出時に自動実行</span>
-              </label>
-              <label class="checkline">
-                <input name="optimize_trade_size" type="checkbox" checked />
-                <span>取引額を自動最適化</span>
-              </label>
-            </div>
-
+            <input type="hidden" name="mode" id="mode-select" value="demo" />
             <input type="hidden" name="exchanges" value="binance,bitget" />
+            <input type="hidden" name="trade_size_quote" value="25" />
+            <input type="hidden" name="optimize_trade_size" checked />
+            <input type="hidden" name="max_trade_size_quote" value="25" />
+            <input type="hidden" name="min_net_profit_pct" value="0.5" />
+            <input type="hidden" name="default_taker_fee_pct" value="0.1" />
+            <input type="hidden" name="live_confirm" value="" />
             <div id="exchange-options" class="hidden"></div>
+            <div id="symbol-options" class="hidden"></div>
+            <button type="button" id="clear-symbols-button" class="hidden">クリア</button>
+
+            <label class="checkline">
+              <input name="auto_execute" type="checkbox" checked />
+              <span>先物デモ戦略を有効化</span>
+            </label>
 
             <label>
               <span>先物リサーチ取引所</span>
@@ -57,98 +52,55 @@
 
             <label>
               <span>監視銘柄</span>
-              <textarea name="symbols" rows="4">COMMON_FUTURES</textarea>
+              <textarea name="symbols" rows="3">COMMON_FUTURES</textarea>
             </label>
-            <div class="quick-picker">
-              <div class="picker-head">
-                <span>銘柄クイック選択</span>
-                <button type="button" id="clear-symbols-button">クリア</button>
-              </div>
-              <div id="symbol-options" class="chip-list"></div>
-            </div>
 
             <div class="form-grid">
-              <label>
-                <span>固定取引額</span>
-                <input name="trade_size_quote" type="number" min="1" step="1" value="100" />
-              </label>
-              <label>
-                <span>自動最適化の上限</span>
-                <input name="max_trade_size_quote" type="number" min="1" step="1" value="1000" />
-              </label>
-              <label>
-                <span>最低純利益 %</span>
-                <input name="min_net_profit_pct" type="number" min="0" step="0.001" value="0.01" />
-              </label>
-              <label>
-                <span>手数料 fallback %</span>
-                <input name="default_taker_fee_pct" type="number" min="0" step="0.001" value="0.10" />
-              </label>
               <label>
                 <span>片道スリッページ %</span>
                 <input name="slippage_pct" type="number" min="0" step="0.001" value="0.005" />
               </label>
               <label>
                 <span>更新秒数</span>
-                <input name="poll_seconds" type="number" min="1" step="1" value="3" />
+                <input name="poll_seconds" type="number" min="1" step="1" value="10" />
               </label>
               <label>
                 <span>板の深さ</span>
-                <input name="orderbook_limit" type="number" min="5" max="100" step="5" value="30" />
+                <input name="orderbook_limit" type="number" min="5" max="100" step="5" value="20" />
               </label>
             </div>
-
-            <label id="live-confirm-row" class="hidden">
-              <span>本番確認文字列</span>
-              <input name="live_confirm" placeholder="I_UNDERSTAND_REAL_ORDERS" />
-            </label>
 
             <div class="button-grid">
               <button type="submit" class="primary">開始</button>
               <button type="button" id="stop-button">停止</button>
-              <button type="button" id="reset-demo-button">デモ口座リセット</button>
               <button type="button" id="save-settings-button">設定適用</button>
+              <button type="button" id="reset-demo-button">履歴リセット</button>
             </div>
           </form>
         </section>
 
         <section class="panel">
           <div class="section-title">
-            <h2>デモ操作</h2>
-            <span>取引の動きを確認</span>
+            <h2>現在のルール</h2>
+            <span>net基準</span>
           </div>
-          <form id="manual-demo-form" class="stack-form">
-            <div class="form-grid">
-              <label><span>銘柄</span><input name="symbol" value="BTC/USDT" /></label>
-              <label><span>取引額</span><input name="quote_amount" type="number" step="1" value="100" /></label>
-              <label><span>買い取引所</span><input name="buy_exchange" value="binance" /></label>
-              <label><span>売り取引所</span><input name="sell_exchange" value="bitget" /></label>
-              <label><span>損益 USDT</span><input name="profit_quote" type="number" step="0.01" value="1" /></label>
-            </div>
-            <button type="submit" class="primary full">手動でデモ約定</button>
-          </form>
-
-          <form id="demo-price-form" class="stack-form with-divider">
-            <div class="form-grid">
-              <label><span>価格操作取引所</span><input name="exchange_id" value="bitget" /></label>
-              <label><span>銘柄</span><input name="symbol" value="DOGE/USDT" /></label>
-              <label><span>Bid調整 %</span><input name="bid_adjust_pct" type="number" step="0.01" value="1" /></label>
-              <label><span>Ask調整 %</span><input name="ask_adjust_pct" type="number" step="0.01" value="0" /></label>
-            </div>
-            <div class="button-grid two">
-              <button type="submit" class="primary">デモ価格を反映</button>
-              <button type="button" id="clear-demo-price-button">価格操作クリア</button>
-            </div>
-          </form>
+          <div class="rule-list">
+            <div><b>Entry</b><span>net spread 1.0%以上</span></div>
+            <div><b>Add 1</b><span>net spread 1.5%以上</span></div>
+            <div><b>Add 2</b><span>net spread 2.0%以上</span></div>
+            <div><b>Exit</b><span>net spread 0.2%以下</span></div>
+            <div><b>Compromise</b><span>60分後、0.5%以下で妥協決済</span></div>
+            <div><b>Risk</b><span>損切りなし、本番発注なし</span></div>
+          </div>
         </section>
       </aside>
 
       <section class="content">
         <section class="metrics">
           <div class="metric"><span>先物市場数</span><strong id="market-count">0</strong></div>
-          <div class="metric"><span>記録中ペア</span><strong id="opportunity-count">0</strong></div>
-          <div class="metric"><span>最大価格差</span><strong id="best-profit">-</strong></div>
-          <div class="metric"><span>デモ損益</span><strong id="demo-profit">0</strong></div>
+          <div class="metric"><span>記録ペア</span><strong id="opportunity-count">0</strong></div>
+          <div class="metric"><span>最大net</span><strong id="best-profit">-</strong></div>
+          <div class="metric"><span>紙トレード損益</span><strong id="demo-profit">0</strong></div>
         </section>
 
         <section class="panel hero-panel">
@@ -162,27 +114,19 @@
         <section class="dashboard-grid">
           <section class="panel">
             <div class="section-title">
-              <h2>価格差推移</h2>
-              <span>純価格差 %</span>
+              <h2>先物価格差ランキング</h2>
+              <span>Gross / Cost / Net</span>
             </div>
-            <div id="spread-chart" class="spread-chart empty">スキャン開始後に表示されます</div>
+            <div id="futures-spread-research" class="ranking-list empty">開始後に表示します</div>
           </section>
 
           <section class="panel">
             <div class="section-title">
-              <h2>価格差ランキング</h2>
-              <span>今の板から判定</span>
+              <h2>建玉</h2>
+              <span>紙トレード</span>
             </div>
-            <div id="spread-ranking" class="ranking-list empty">価格取得後に表示されます</div>
+            <div id="futures-positions" class="ranking-list empty">現在の建玉はありません</div>
           </section>
-        </section>
-
-        <section class="panel">
-          <div class="section-title">
-            <h2>先物価格差リサーチ</h2>
-            <span>USDT-M / ロング安値側・ショート高値側</span>
-          </div>
-          <div id="futures-spread-research" class="ranking-list empty">開始後に先物価格差を記録します</div>
         </section>
 
         <section class="panel">
@@ -199,8 +143,8 @@
                   <th>状態</th>
                   <th>Bid</th>
                   <th>Ask</th>
-                  <th>Fee</th>
-                  <th>Fee source</th>
+                  <th>Mid</th>
+                  <th>板厚 USDT</th>
                   <th>詳細</th>
                 </tr>
               </thead>
@@ -212,8 +156,8 @@
         <section class="dashboard-grid">
           <section class="panel">
             <div class="section-title">
-              <h2>デモ取引履歴</h2>
-              <span id="demo-cash">Cash 10,000</span>
+              <h2>紙トレード履歴</h2>
+              <span id="demo-cash">Paper</span>
             </div>
             <div class="table-wrap">
               <table>
@@ -221,59 +165,15 @@
                   <tr>
                     <th>時刻</th>
                     <th>銘柄</th>
-                    <th>経路</th>
-                    <th>取引額</th>
-                    <th>純利益率</th>
-                    <th>利益</th>
+                    <th>方向</th>
+                    <th>金額</th>
+                    <th>損益率</th>
+                    <th>損益</th>
                   </tr>
                 </thead>
                 <tbody id="trades"></tbody>
               </table>
             </div>
-          </section>
-
-          <section class="panel">
-            <div class="section-title">
-              <h2>デモ残高</h2>
-              <span>Paper account</span>
-            </div>
-            <div id="demo-account" class="account-grid"></div>
-          </section>
-        </section>
-
-        <section class="panel">
-          <div class="section-title">
-            <h2>本番前チェック</h2>
-            <button type="button" id="preflight-button">チェック実行</button>
-          </div>
-          <div class="table-wrap tall">
-            <table>
-              <thead>
-                <tr>
-                  <th>取引所</th>
-                  <th>銘柄</th>
-                  <th>判定</th>
-                  <th>手数料</th>
-                  <th>Fee source</th>
-                  <th>最小金額</th>
-                  <th>最小数量</th>
-                  <th>Quote残高</th>
-                  <th>Base残高</th>
-                  <th>詳細</th>
-                </tr>
-              </thead>
-              <tbody id="preflight-results"></tbody>
-            </table>
-          </div>
-        </section>
-
-        <section class="dashboard-grid">
-          <section class="panel">
-            <div class="section-title">
-              <h2>本番残高</h2>
-              <span id="live-ready">LIVE_TRADING=false</span>
-            </div>
-            <div id="balances" class="balances empty">本番モード起動時に表示されます</div>
           </section>
 
           <section class="panel">
@@ -296,17 +196,17 @@
               <pre id="history-app-log" class="history-box">まだ読み込んでいません</pre>
             </div>
             <div>
-              <div class="subhead">保存済み取引</div>
+              <div class="subhead">決済履歴</div>
               <div class="table-wrap history-table">
                 <table>
                   <thead>
                     <tr>
                       <th>時刻</th>
                       <th>銘柄</th>
-                      <th>経路</th>
-                      <th>取引額</th>
-                      <th>純利益率</th>
-                      <th>利益</th>
+                      <th>方向</th>
+                      <th>金額</th>
+                      <th>損益率</th>
+                      <th>損益</th>
                     </tr>
                   </thead>
                   <tbody id="history-trades"></tbody>
@@ -318,6 +218,21 @@
         </section>
       </section>
     </main>
+
+    <div class="hidden">
+      <div id="spread-chart"></div>
+      <div id="spread-ranking"></div>
+      <div id="balances"></div>
+      <div id="demo-account"></div>
+      <div id="preflight-results"></div>
+      <button id="preflight-button"></button>
+      <form id="manual-demo-form"></form>
+      <form id="demo-price-form"></form>
+      <button id="clear-demo-price-button"></button>
+      <span id="live-ready"></span>
+      <div id="mode-select-placeholder"></div>
+      <label id="live-confirm-row"></label>
+    </div>
 
     <script src="/static/app.js"></script>
   </body>
