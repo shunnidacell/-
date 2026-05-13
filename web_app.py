@@ -623,8 +623,6 @@ class BotRuntime:
                     live_trading=config.live_trading,
                     live_confirm=config.live_confirm,
                 )
-                self.settings.symbols = ",".join(filtered_symbols)
-                save_settings(self.settings)
                 self.log("ready", f"Live-book futures symbols: {len(filtered_symbols)}")
             self.log("ready", f"FUTURES research {', '.join(config.symbols)}: {', '.join(futures_exchanges)}")
 
