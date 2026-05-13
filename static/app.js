@@ -35,6 +35,7 @@ const relativeOpenAutoButton = document.querySelector("#relative-open-auto");
 const relativeStrongEl = document.querySelector("#relative-strong");
 const relativeWeakEl = document.querySelector("#relative-weak");
 const relativePositionsEl = document.querySelector("#relative-positions");
+const relativeTradesEl = document.querySelector("#relative-trades");
 
 let settingsApplied = false;
 
@@ -235,6 +236,25 @@ function renderRelativePositions(positions) {
   }).join("");
 }
 
+function renderRelativeTrades(trades) {
+  if (!relativeTradesEl) return;
+  relativeTradesEl.innerHTML = (trades || []).map((trade) => {
+    const pnl = Number(trade.profit_quote || 0);
+    return `
+      <tr>
+        <td>${trade.timestamp ? new Date(trade.timestamp).toLocaleTimeString() : "-"}</td>
+        <td>${escapeHtml(trade.long_symbol || "-")}</td>
+        <td>${escapeHtml((trade.short_symbols || []).join(", "))}</td>
+        <td>${numberText(trade.relative_pct)}%</td>
+        <td class="${pnl >= 0 ? "positive" : "negative"}">${pnl >= 0 ? "+" : ""}${moneyText(pnl)}</td>
+      </tr>
+    `;
+  }).join("");
+  if (!relativeTradesEl.innerHTML) {
+    relativeTradesEl.innerHTML = `<tr><td colspan="5" class="empty-cell">まだ結果はありません</td></tr>`;
+  }
+}
+
 function renderState(state) {
   const marketStatuses = state.market_statuses || [];
   const latestFutures = (state.futures_spread_history || []).at(-1);
@@ -292,6 +312,8 @@ function renderState(state) {
   renderRelativeList(relativeStrongEl, state.relative_rankings?.strong || [], "履歴が貯まると表示します");
   renderRelativeList(relativeWeakEl, state.relative_rankings?.weak || [], "履歴が貯まると表示します");
   renderRelativePositions(state.relative_positions || []);
+
+  renderRelativeTrades(state.relative_closed_trades || []);
 
   tradesEl.innerHTML = (state.trades || []).map((trade) => `
     <tr>
