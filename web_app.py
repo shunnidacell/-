@@ -504,6 +504,7 @@ class BotRuntime:
         self.spread_history: deque[dict[str, Any]] = deque(maxlen=300)
         self.futures_spread_history: deque[dict[str, Any]] = deque(maxlen=500)
         self.futures_market_statuses: list[dict[str, Any]] = []
+        self.futures_perf: dict[str, Any] = {}
         self.balances: list[dict[str, Any]] = []
         self.exchange_handles: dict[str, Any] = {}
         self.preflight_results: list[dict[str, Any]] = []
@@ -600,9 +601,31 @@ class BotRuntime:
                     live_trading=config.live_trading,
                     live_confirm=config.live_confirm,
                 )
-                self.settings.symbols = ",".join(common_symbols)
-                save_settings(self.settings)
                 self.log("ready", f"Common futures symbols: {len(common_symbols)}")
+            filtered_symbols = await self._filter_symbols_with_futures_books(
+                futures_exchanges,
+                config.symbols,
+                config.orderbook_limit,
+            )
+            if not filtered_symbols:
+                raise RuntimeError("No futures symbols with live order books found")
+            if filtered_symbols != config.symbols:
+                config = Config(
+                    exchanges=config.exchanges,
+                    symbols=filtered_symbols,
+                    trade_size_quote=config.trade_size_quote,
+                    min_net_profit_pct=config.min_net_profit_pct,
+                    default_taker_fee_pct=config.default_taker_fee_pct,
+                    slippage_pct=config.slippage_pct,
+                    poll_seconds=config.poll_seconds,
+                    orderbook_limit=config.orderbook_limit,
+                    mode=config.mode,
+                    live_trading=config.live_trading,
+                    live_confirm=config.live_confirm,
+                )
+                self.settings.symbols = ",".join(filtered_symbols)
+                save_settings(self.settings)
+                self.log("ready", f"Live-book futures symbols: {len(filtered_symbols)}")
             self.log("ready", f"FUTURES research {', '.join(config.symbols)}: {', '.join(futures_exchanges)}")
 
             while self.stop_event and not self.stop_event.is_set():
@@ -772,6 +795,37 @@ class BotRuntime:
                 }
         return set()
 
+    async def _filter_symbols_with_futures_books(self, exchange_ids: list[str], symbols: list[str], limit: int) -> list[str]:
+        checks = await asyncio.gather(
+            *[
+                self._fetch_futures_quote(exchange_id, symbol, Config(
+                    exchanges=[],
+                    symbols=[],
+                    trade_size_quote=Decimal("1"),
+                    min_net_profit_pct=Decimal("0"),
+                    default_taker_fee_pct=Decimal("0"),
+                    slippage_pct=Decimal("0"),
+                    poll_seconds=1,
+                    orderbook_limit=limit,
+                    mode="demo",
+                    live_trading=False,
+                    live_confirm="",
+                ))
+                for exchange_id in exchange_ids
+                for symbol in symbols
+            ],
+            return_exceptions=True,
+        )
+        status_by_symbol: dict[str, set[str]] = {symbol: set() for symbol in symbols}
+        for item in checks:
+            if isinstance(item, dict) and item.get("status") == "ok":
+                status_by_symbol.setdefault(item["symbol"], set()).add(item["exchange_id"])
+        filtered = [symbol for symbol in symbols if status_by_symbol.get(symbol, set()) >= set(exchange_ids)]
+        removed = len(symbols) - len(filtered)
+        if removed:
+            self.log("ready", f"Filtered {removed} symbols without live books on all futures exchanges")
+        return filtered
+
     def _find_usdt_swap_symbol(self, markets: dict[str, Any], spot_symbol: str) -> str | None:
         base, quote = spot_symbol.split("/") if "/" in spot_symbol else (spot_symbol, "USDT")
         candidates = [f"{base}/USDT:USDT", spot_symbol]
@@ -846,6 +900,7 @@ class BotRuntime:
         append_jsonl(SPREAD_LOG_PATH, item)
 
     async def _record_futures_spread_history(self, exchanges, config: Config) -> None:
+        started = datetime.now(timezone.utc)
         quote_results = await asyncio.gather(
             *[
                 self._fetch_futures_quote(exchange_id, symbol, config)
@@ -857,6 +912,10 @@ class BotRuntime:
         quotes = [item for item in quote_results if isinstance(item, dict) and item.get("status") == "ok"]
         statuses = [item for item in quote_results if isinstance(item, dict)]
         self.futures_market_statuses = to_jsonable(statuses)
+        status_counts: dict[str, int] = {}
+        for status in statuses:
+            key = str(status.get("status", "unknown"))
+            status_counts[key] = status_counts.get(key, 0) + 1
 
         by_symbol: dict[str, list[dict[str, Any]]] = {}
         for quote in quotes:
@@ -918,6 +977,21 @@ class BotRuntime:
         )
         self.futures_spread_history.append(item)
         append_jsonl(FUTURES_SPREAD_LOG_PATH, item)
+        elapsed = (datetime.now(timezone.utc) - started).total_seconds()
+        self.futures_perf = {
+            "last_scan_seconds": Decimal(str(round(elapsed, 3))),
+            "poll_seconds": Decimal(str(config.poll_seconds)),
+            "symbol_count": len(config.symbols),
+            "exchange_count": len(exchanges),
+            "request_count": len(config.symbols) * len(exchanges),
+            "ok_count": status_counts.get("ok", 0),
+            "no_quote_count": status_counts.get("no_quote", 0),
+            "error_count": status_counts.get("error", 0),
+            "point_count": len(points),
+            "load_pct": Decimal(str(round((elapsed / config.poll_seconds) * 100, 1))) if config.poll_seconds else Decimal("0"),
+            "status_counts": status_counts,
+            "updated_at": datetime.now(timezone.utc),
+        }
 
     async def _fetch_futures_quote(self, exchange_id: str, spot_symbol: str, config: Config) -> dict[str, Any]:
         try:
@@ -1417,6 +1491,7 @@ class BotRuntime:
                     "total": self.futures_realized_profit + self.futures_unrealized_profit,
                 }
             ),
+            "futures_perf": to_jsonable(self.futures_perf),
             "balances": self.balances,
             "preflight_results": self.preflight_results,
             "live_ready": os.getenv("LIVE_TRADING", "false").strip().lower() == "true",

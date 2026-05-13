@@ -363,7 +363,7 @@ select:focus {
 
 .metrics {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -387,6 +387,59 @@ select:focus {
 
 .hero-panel {
   border-color: var(--line-strong);
+}
+
+.load-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.load-grid div {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.load-grid span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.load-grid b {
+  display: block;
+  margin-top: 6px;
+  font-size: 22px;
+}
+
+.load-bar {
+  height: 12px;
+  margin-top: 14px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-soft);
+  border: 1px solid var(--line);
+}
+
+.load-bar div {
+  height: 100%;
+  min-width: 3%;
+  transition: width 0.2s ease;
+}
+
+.load-bar .good {
+  background: var(--accent);
+}
+
+.load-bar .warn {
+  background: var(--amber);
+}
+
+.load-bar .bad {
+  background: var(--danger);
 }
 
 .dashboard-grid {
@@ -785,6 +838,11 @@ td.detail {
     overflow: visible;
     padding-right: 0;
   }
+
+  .metrics,
+  .load-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 720px) {
@@ -801,6 +859,7 @@ td.detail {
   }
 
   .metrics,
+  .load-grid,
   .form-grid,
   .button-grid,
   .account-grid {

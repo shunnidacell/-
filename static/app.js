@@ -22,6 +22,12 @@ const historyAppLogEl = document.querySelector("#history-app-log");
 const historyTradesEl = document.querySelector("#history-trades");
 const historyFilesEl = document.querySelector("#history-files");
 const eventReportEl = document.querySelector("#event-report");
+const scanDurationEl = document.querySelector("#scan-duration");
+const scanRequestsEl = document.querySelector("#scan-requests");
+const scanSuccessEl = document.querySelector("#scan-success");
+const scanNoQuoteEl = document.querySelector("#scan-noquote");
+const scanErrorEl = document.querySelector("#scan-error");
+const loadBarFillEl = document.querySelector("#load-bar-fill");
 
 let settingsApplied = false;
 
@@ -181,6 +187,7 @@ function renderState(state) {
   const points = latestFutures?.points || [];
   const portfolio = state.portfolio || {};
   const futuresPnl = state.futures_paper_pnl || {};
+  const perf = state.futures_perf || {};
 
   statusEl.textContent = state.running ? "実行中" : "停止中";
   statusEl.classList.toggle("running", state.running);
@@ -198,6 +205,19 @@ function renderState(state) {
   paperProfitEl.classList.toggle("positive", totalPnl >= 0);
   demoCashEl.textContent = "Paper";
   lastTickEl.textContent = state.last_tick ? new Date(state.last_tick).toLocaleString() : "未取得";
+
+  if (scanDurationEl) {
+    scanDurationEl.textContent = perf.last_scan_seconds
+      ? `${numberText(perf.last_scan_seconds, 2)}秒 / 目標 ${numberText(perf.poll_seconds, 0)}秒`
+      : "-";
+    scanRequestsEl.textContent = perf.request_count ?? "-";
+    scanSuccessEl.textContent = perf.ok_count ?? "-";
+    scanNoQuoteEl.textContent = perf.no_quote_count ?? "-";
+    scanErrorEl.textContent = perf.error_count ?? "-";
+    const loadPct = Number(perf.load_pct || 0);
+    loadBarFillEl.style.width = `${Math.max(3, Math.min(100, loadPct))}%`;
+    loadBarFillEl.className = loadPct >= 100 ? "bad" : loadPct >= 70 ? "warn" : "good";
+  }
 
   marketsEl.innerHTML = marketStatuses.map((item) => `
     <tr>
