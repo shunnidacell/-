@@ -47,7 +47,7 @@ load_dotenv(ROOT / ".env")
 
 class BotSettings(BaseModel):
     exchanges: str = Field(default="binance,okx,bitget")
-    futures_exchanges: str = Field(default="binance,hyperliquid")
+    futures_exchanges: str = Field(default="binance,okx,hyperliquid")
     symbols: str = Field(default="BTC/USDT,ETH/USDT,SOL/USDT")
     trade_size_quote: float = Field(default=100, gt=0)
     optimize_trade_size: bool = Field(default=True)
@@ -141,7 +141,7 @@ def settings_to_config(settings: BotSettings) -> Config:
 def config_to_settings(config: Config) -> BotSettings:
     return BotSettings(
         exchanges=",".join(config.exchanges),
-        futures_exchanges="binance,hyperliquid",
+        futures_exchanges="binance,okx,hyperliquid",
         symbols=",".join(config.symbols),
         trade_size_quote=float(config.trade_size_quote),
         optimize_trade_size=True,
@@ -755,11 +755,12 @@ class BotRuntime:
                 async with session.get("https://www.okx.com/api/v5/public/instruments?instType=SWAP", timeout=10) as response:
                     response.raise_for_status()
                     data = await response.json()
-                return {
-                    item.get("baseCcy", "").upper()
-                    for item in data.get("data", [])
-                    if item.get("settleCcy") == "USDT" and item.get("state") == "live"
-                }
+                symbols = set()
+                for item in data.get("data", []):
+                    inst_id = item.get("instId", "")
+                    if item.get("settleCcy") == "USDT" and item.get("state") == "live" and inst_id.endswith("-USDT-SWAP"):
+                        symbols.add(inst_id.split("-")[0].upper())
+                return symbols
             if exchange_id == "bitget":
                 async with session.get("https://api.bitget.com/api/v2/mix/market/contracts?productType=USDT-FUTURES", timeout=10) as response:
                     response.raise_for_status()
