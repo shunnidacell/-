@@ -156,7 +156,10 @@ function renderPositions(positions) {
     return;
   }
   positionsEl.className = "ranking-list";
-  positionsEl.innerHTML = positions.map((position) => `
+  positionsEl.innerHTML = positions.map((position) => {
+    const unrealized = Number(position.quote_amount || 0) *
+      ((Number(position.entry_spread_pct || 0) - Number(position.last_spread_pct || 0)) / 100);
+    return `
     <article class="ranking-row positive-rank">
       <div>
         <strong>${escapeHtml(position.symbol)}</strong>
@@ -166,9 +169,10 @@ function renderPositions(positions) {
         <span>Entry ${numberText(position.entry_spread_pct)}%</span>
         <span>Last ${numberText(position.last_spread_pct)}% / Add ${position.add_count || 0}</span>
       </div>
-      <div class="rank-net">${moneyText(position.quote_amount)} USDT</div>
+      <div class="rank-net ${unrealized >= 0 ? "positive" : "negative"}">${unrealized >= 0 ? "+" : ""}${moneyText(unrealized)}</div>
     </article>
-  `).join("");
+  `;
+  }).join("");
 }
 
 function renderState(state) {
@@ -176,6 +180,7 @@ function renderState(state) {
   const latestFutures = (state.futures_spread_history || []).at(-1);
   const points = latestFutures?.points || [];
   const portfolio = state.portfolio || {};
+  const futuresPnl = state.futures_paper_pnl || {};
 
   statusEl.textContent = state.running ? "実行中" : "停止中";
   statusEl.classList.toggle("running", state.running);
@@ -188,8 +193,9 @@ function renderState(state) {
   marketCountEl.textContent = marketStatuses.length;
   pairCountEl.textContent = points.length;
   bestNetEl.textContent = points[0] ? `${numberText(pointNet(points[0]))}%` : "-";
-  paperProfitEl.textContent = moneyText(portfolio.realized_profit || 0);
-  paperProfitEl.classList.toggle("positive", Number(portfolio.realized_profit || 0) >= 0);
+  const totalPnl = Number(futuresPnl.total ?? portfolio.realized_profit ?? 0);
+  paperProfitEl.textContent = moneyText(totalPnl);
+  paperProfitEl.classList.toggle("positive", totalPnl >= 0);
   demoCashEl.textContent = "Paper";
   lastTickEl.textContent = state.last_tick ? new Date(state.last_tick).toLocaleString() : "未取得";
 

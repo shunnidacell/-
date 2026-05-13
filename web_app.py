@@ -510,6 +510,8 @@ class BotRuntime:
         self.demo_price_adjustments: dict[tuple[str, str], dict[str, Decimal]] = {}
         self.futures_positions: dict[str, dict[str, Any]] = {}
         self.futures_closed_trades: deque[dict[str, Any]] = deque(maxlen=300)
+        self.futures_unrealized_profit = Decimal("0")
+        self.futures_realized_profit = Decimal("0")
         self.demo = DemoBroker()
         self.settings = load_saved_settings() or config_to_settings(load_config())
         self.last_error: str | None = None
@@ -1340,8 +1342,25 @@ class BotRuntime:
             self.futures_closed_trades.appendleft(json_trade)
             self.demo.trades.appendleft(json_trade)
             append_jsonl(TRADE_LOG_PATH, trade)
+            self.demo.realized_profit += profit
+            self.demo.cash += profit
             self.log("paper", f"FUTURES PAPER exit {symbol}: entry {entry:.4f}% exit {spread:.4f}% pnl {profit:.4f}")
             self.futures_positions.pop(symbol, None)
+
+        self._refresh_futures_paper_pnl()
+
+    def _refresh_futures_paper_pnl(self) -> None:
+        unrealized = Decimal("0")
+        for position in self.futures_positions.values():
+            entry = Decimal(str(position["entry_spread_pct"]))
+            last = Decimal(str(position["last_spread_pct"]))
+            amount = Decimal(str(position["quote_amount"]))
+            unrealized += amount * ((entry - last) / Decimal("100"))
+        realized = Decimal("0")
+        for trade in self.futures_closed_trades:
+            realized += Decimal(str(trade.get("profit_quote", "0") or "0"))
+        self.futures_unrealized_profit = unrealized
+        self.futures_realized_profit = realized
 
     async def _refresh_balances(self, exchanges) -> None:
         balances = []
@@ -1369,6 +1388,7 @@ class BotRuntime:
 
     def state(self) -> dict[str, Any]:
         running = bool(self.task and not self.task.done())
+        self._refresh_futures_paper_pnl()
         return {
             "running": running,
             "settings": self.settings.model_dump(),
@@ -1386,6 +1406,13 @@ class BotRuntime:
             "trades": list(self.demo.trades),
             "futures_positions": to_jsonable(list(self.futures_positions.values())),
             "futures_closed_trades": list(self.futures_closed_trades),
+            "futures_paper_pnl": to_jsonable(
+                {
+                    "realized": self.futures_realized_profit,
+                    "unrealized": self.futures_unrealized_profit,
+                    "total": self.futures_realized_profit + self.futures_unrealized_profit,
+                }
+            ),
             "balances": self.balances,
             "preflight_results": self.preflight_results,
             "live_ready": os.getenv("LIVE_TRADING", "false").strip().lower() == "true",
