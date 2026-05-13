@@ -21,6 +21,7 @@ const historyRefreshButton = document.querySelector("#history-refresh-button");
 const historyAppLogEl = document.querySelector("#history-app-log");
 const historyTradesEl = document.querySelector("#history-trades");
 const historyFilesEl = document.querySelector("#history-files");
+const eventReportEl = document.querySelector("#event-report");
 
 let settingsApplied = false;
 
@@ -252,6 +253,22 @@ async function loadHistory() {
   `).join("");
   if (!historyTradesEl.innerHTML) {
     historyTradesEl.innerHTML = `<tr><td colspan="6" class="empty-cell">決済履歴はまだありません</td></tr>`;
+  }
+  eventReportEl.innerHTML = (history.futures_event_report || []).map((event) => `
+    <tr>
+      <td>${event.entry_time ? new Date(event.entry_time).toLocaleString() : "-"}</td>
+      <td>${escapeHtml(event.symbol || "-")}</td>
+      <td>${numberText(event.entry_spread_pct)}%</td>
+      <td>${numberText(event.max_spread_pct)}%</td>
+      <td>${event.exit_time ? `${numberText(event.exit_spread_pct)}%` : `OPEN ${numberText(event.exit_spread_pct)}%`}</td>
+      <td>${numberText(event.held_minutes, 1)}分</td>
+      <td>${event.add_count || 0}回 / ${moneyText(event.amount_with_add)} USDT</td>
+      <td class="${Number(event.pnl_no_add) >= 0 ? "positive" : "negative"}">${Number(event.pnl_no_add) >= 0 ? "+" : ""}${moneyText(event.pnl_no_add)}</td>
+      <td class="${Number(event.pnl_with_add) >= 0 ? "positive" : "negative"}">${Number(event.pnl_with_add) >= 0 ? "+" : ""}${moneyText(event.pnl_with_add)}</td>
+    </tr>
+  `).join("");
+  if (!eventReportEl.innerHTML) {
+    eventReportEl.innerHTML = `<tr><td colspan="9" class="empty-cell">1%超えイベントはまだありません</td></tr>`;
   }
   const files = history.files || {};
   historyFilesEl.innerHTML = `

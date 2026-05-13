@@ -199,6 +199,129 @@ def read_tail_jsonl(path: Path, limit: int = 200) -> list[dict[str, Any]]:
     return rows
 
 
+def futures_event_report(
+    entry_threshold: Decimal = Decimal("1.0"),
+    add_threshold: Decimal = Decimal("1.5"),
+    second_add_threshold: Decimal = Decimal("2.0"),
+    exit_threshold: Decimal = Decimal("0.2"),
+    cost_pct: Decimal = Decimal("0.24"),
+    quote_amount: Decimal = Decimal("10"),
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    if not FUTURES_SPREAD_LOG_PATH.exists():
+        return []
+    by_symbol: dict[str, list[dict[str, Any]]] = {}
+    for line in FUTURES_SPREAD_LOG_PATH.read_text(encoding="utf-8", errors="replace").splitlines():
+        try:
+            row = json.loads(line)
+            timestamp = datetime.fromisoformat(row["timestamp"])
+        except Exception:
+            continue
+        for point in row.get("points", []):
+            symbol = point.get("symbol")
+            raw_spread = point.get("spread_pct")
+            if not symbol or raw_spread is None:
+                continue
+            spread = Decimal(str(raw_spread))
+            by_symbol.setdefault(symbol, []).append(
+                {
+                    "timestamp": timestamp,
+                    "spread": spread,
+                    "direction": point.get("direction", ""),
+                    "net_spread": Decimal(str(point.get("net_spread_pct"))) if point.get("net_spread_pct") is not None else None,
+                }
+            )
+
+    events: list[dict[str, Any]] = []
+    for symbol, rows in by_symbol.items():
+        rows.sort(key=lambda item: item["timestamp"])
+        position: dict[str, Any] | None = None
+        for item in rows:
+            spread = item["spread"]
+            if position is None:
+                if spread >= entry_threshold:
+                    position = {
+                        "symbol": symbol,
+                        "entry_time": item["timestamp"],
+                        "entry_spread_pct": spread,
+                        "direction": item["direction"],
+                        "amount_no_add": quote_amount,
+                        "amount_with_add": quote_amount,
+                        "avg_with_add": spread,
+                        "add_count": 0,
+                        "max_spread_pct": spread,
+                    }
+                continue
+
+            position["max_spread_pct"] = max(position["max_spread_pct"], spread)
+            if position["add_count"] == 0 and spread >= add_threshold:
+                amount = Decimal(str(position["amount_with_add"]))
+                avg = Decimal(str(position["avg_with_add"]))
+                position["avg_with_add"] = ((avg * amount) + (spread * quote_amount)) / (amount + quote_amount)
+                position["amount_with_add"] = amount + quote_amount
+                position["add_count"] = 1
+            elif position["add_count"] == 1 and spread >= second_add_threshold:
+                amount = Decimal(str(position["amount_with_add"]))
+                avg = Decimal(str(position["avg_with_add"]))
+                position["avg_with_add"] = ((avg * amount) + (spread * quote_amount)) / (amount + quote_amount)
+                position["amount_with_add"] = amount + quote_amount
+                position["add_count"] = 2
+
+            if spread <= exit_threshold:
+                entry = Decimal(str(position["entry_spread_pct"]))
+                avg_add = Decimal(str(position["avg_with_add"]))
+                amount_add = Decimal(str(position["amount_with_add"]))
+                held_minutes = Decimal(str((item["timestamp"] - position["entry_time"]).total_seconds() / 60))
+                events.append(
+                    to_jsonable(
+                        {
+                            "symbol": symbol,
+                            "entry_time": position["entry_time"],
+                            "exit_time": item["timestamp"],
+                            "held_minutes": held_minutes,
+                            "direction": position["direction"],
+                            "entry_spread_pct": entry,
+                            "max_spread_pct": position["max_spread_pct"],
+                            "exit_spread_pct": spread,
+                            "add_count": position["add_count"],
+                            "pnl_no_add": quote_amount * ((entry - spread - cost_pct) / Decimal("100")),
+                            "pnl_with_add": amount_add * ((avg_add - spread - cost_pct) / Decimal("100")),
+                            "amount_with_add": amount_add,
+                            "cost_pct": cost_pct,
+                        }
+                    )
+                )
+                position = None
+        if position is not None:
+            latest = rows[-1]
+            entry = Decimal(str(position["entry_spread_pct"]))
+            avg_add = Decimal(str(position["avg_with_add"]))
+            amount_add = Decimal(str(position["amount_with_add"]))
+            held_minutes = Decimal(str((latest["timestamp"] - position["entry_time"]).total_seconds() / 60))
+            events.append(
+                to_jsonable(
+                    {
+                        "symbol": symbol,
+                        "entry_time": position["entry_time"],
+                        "exit_time": None,
+                        "held_minutes": held_minutes,
+                        "direction": position["direction"],
+                        "entry_spread_pct": entry,
+                        "max_spread_pct": position["max_spread_pct"],
+                        "exit_spread_pct": latest["spread"],
+                        "add_count": position["add_count"],
+                        "pnl_no_add": quote_amount * ((entry - latest["spread"] - cost_pct) / Decimal("100")),
+                        "pnl_with_add": amount_add * ((avg_add - latest["spread"] - cost_pct) / Decimal("100")),
+                        "amount_with_add": amount_add,
+                        "cost_pct": cost_pct,
+                        "status": "open",
+                    }
+                )
+            )
+    events.sort(key=lambda item: item["entry_time"], reverse=True)
+    return events[:limit]
+
+
 def has_private_credentials(exchange_id: str) -> bool:
     prefix = exchange_id.upper()
     return bool(os.getenv(f"{prefix}_API_KEY") and os.getenv(f"{prefix}_SECRET"))
@@ -1293,6 +1416,7 @@ async def get_history(limit: int = 200):
         "trades": list(reversed(read_tail_jsonl(TRADE_LOG_PATH, limit))),
         "spread_history": list(reversed(read_tail_jsonl(SPREAD_LOG_PATH, limit))),
         "futures_spread_history": list(reversed(read_tail_jsonl(FUTURES_SPREAD_LOG_PATH, limit))),
+        "futures_event_report": futures_event_report(limit=limit),
         "files": {
             "app_log": str(APP_LOG_PATH),
             "trades": str(TRADE_LOG_PATH),
