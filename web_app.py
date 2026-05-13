@@ -1262,9 +1262,9 @@ class BotRuntime:
         return fees + slippage + one_sided_buffer
 
     def _update_futures_paper_strategy(self, points: list[dict[str, Any]]) -> None:
-        entry_threshold = Decimal(os.getenv("FUTURES_ENTRY_SPREAD_PCT", "1.0"))
-        add_threshold = Decimal(os.getenv("FUTURES_ADD_SPREAD_PCT", "1.5"))
-        second_add_threshold = Decimal(os.getenv("FUTURES_SECOND_ADD_SPREAD_PCT", "2.0"))
+        entry_threshold = Decimal(os.getenv("FUTURES_PAPER_ENTRY_SPREAD_PCT", "0.5"))
+        add_threshold = Decimal(os.getenv("FUTURES_PAPER_ADD_SPREAD_PCT", "1.0"))
+        second_add_threshold = Decimal(os.getenv("FUTURES_PAPER_SECOND_ADD_SPREAD_PCT", "1.5"))
         take_profit_threshold = Decimal(os.getenv("FUTURES_EXIT_SPREAD_PCT", "0.2"))
         compromise_minutes = Decimal(os.getenv("FUTURES_COMPROMISE_MINUTES", "60"))
         compromise_threshold = Decimal(os.getenv("FUTURES_COMPROMISE_EXIT_SPREAD_PCT", "0.5"))
