@@ -1263,8 +1263,12 @@ class BotRuntime:
 
     def _update_futures_paper_strategy(self, points: list[dict[str, Any]]) -> None:
         entry_threshold = Decimal(os.getenv("FUTURES_PAPER_ENTRY_SPREAD_PCT", "0.5"))
-        add_threshold = Decimal(os.getenv("FUTURES_PAPER_ADD_SPREAD_PCT", "1.0"))
-        second_add_threshold = Decimal(os.getenv("FUTURES_PAPER_SECOND_ADD_SPREAD_PCT", "1.5"))
+        add_thresholds = [
+            Decimal(os.getenv("FUTURES_PAPER_ADD_SPREAD_PCT", "1.0")),
+            Decimal(os.getenv("FUTURES_PAPER_SECOND_ADD_SPREAD_PCT", "1.5")),
+            Decimal(os.getenv("FUTURES_PAPER_THIRD_ADD_SPREAD_PCT", "2.0")),
+            Decimal(os.getenv("FUTURES_PAPER_FOURTH_ADD_SPREAD_PCT", "3.0")),
+        ]
         take_profit_threshold = Decimal(os.getenv("FUTURES_EXIT_SPREAD_PCT", "0.2"))
         compromise_minutes = Decimal(os.getenv("FUTURES_COMPROMISE_MINUTES", "60"))
         compromise_threshold = Decimal(os.getenv("FUTURES_COMPROMISE_EXIT_SPREAD_PCT", "0.5"))
@@ -1295,10 +1299,9 @@ class BotRuntime:
             position["last_spread_pct"] = spread
             held_minutes = Decimal(str((now - position["opened_at"]).total_seconds() / 60))
             next_add_threshold = None
-            if position["add_count"] == 0:
-                next_add_threshold = add_threshold
-            elif position["add_count"] == 1:
-                next_add_threshold = second_add_threshold
+            add_count = int(position["add_count"])
+            if add_count < len(add_thresholds):
+                next_add_threshold = add_thresholds[add_count]
 
             if next_add_threshold is not None and spread >= next_add_threshold:
                 old_amount = Decimal(str(position["quote_amount"]))
