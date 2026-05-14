@@ -1892,7 +1892,7 @@ class BotRuntime:
             self.close_relative_position(position_id, status=status)
 
     def _update_futures_paper_strategy(self, points: list[dict[str, Any]]) -> None:
-        entry_threshold = Decimal(os.getenv("FUTURES_PAPER_ENTRY_SPREAD_PCT", "0.5"))
+        entry_threshold = Decimal(os.getenv("FUTURES_PAPER_ENTRY_SPREAD_PCT", "0.25"))
         max_expected_spread = Decimal(os.getenv("FUTURES_MAX_EXPECTED_SPREAD_PCT", "4.0"))
         add_thresholds = [
             Decimal(os.getenv("FUTURES_PAPER_ADD_SPREAD_PCT", "1.0")),
