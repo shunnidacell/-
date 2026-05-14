@@ -206,8 +206,19 @@ def append_jsonl(path: Path, item: dict[str, Any]) -> None:
 def read_tail_lines(path: Path, limit: int = 300) -> list[str]:
     if not path.exists():
         return []
-    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    return lines[-limit:]
+    if limit <= 0:
+        return []
+    chunk_size = 1024 * 1024
+    data = b""
+    with path.open("rb") as file:
+        file.seek(0, 2)
+        position = file.tell()
+        while position > 0 and data.count(b"\n") <= limit:
+            read_size = min(chunk_size, position)
+            position -= read_size
+            file.seek(position)
+            data = file.read(read_size) + data
+    return data.decode("utf-8", errors="replace").splitlines()[-limit:]
 
 
 def read_tail_jsonl(path: Path, limit: int = 200) -> list[dict[str, Any]]:
@@ -341,6 +352,143 @@ def futures_event_report(
             )
     events.sort(key=lambda item: item["entry_time"], reverse=True)
     return events[:limit]
+
+
+def relative_learning_report(
+    limit: int = 200,
+    horizon_minutes: int = 30,
+    assumed_cost_pct: Decimal = Decimal("0.10"),
+    snapshots: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    if snapshots is None:
+        snapshots = read_tail_jsonl(RELATIVE_FEATURE_LOG_PATH, min(limit, 80))
+    snapshots = [item for item in snapshots[-limit:] if item.get("features")]
+    if len(snapshots) < 2:
+        return {"status": "not_enough_data", "sample_count": len(snapshots), "trade_count": 0}
+
+    def item_time(item: dict[str, Any]) -> datetime | None:
+        try:
+            return datetime.fromisoformat(str(item.get("timestamp")))
+        except Exception:
+            return None
+
+    def row_price(row: dict[str, Any]) -> Decimal | None:
+        for key in ("vwap", "mid", "ohlcv_close"):
+            if row.get(key) is None:
+                continue
+            try:
+                value = Decimal(str(row[key]))
+                if value > 0:
+                    return value
+            except Exception:
+                continue
+        return None
+
+    def rows_by_symbol(item: dict[str, Any]) -> dict[str, dict[str, Any]]:
+        return {str(row.get("symbol")): row for row in item.get("features", []) if row.get("symbol")}
+
+    trades: list[dict[str, Any]] = []
+    for index, entry in enumerate(snapshots[:-1]):
+        entry_time = item_time(entry)
+        if entry_time is None:
+            continue
+        exit_item = None
+        for candidate in snapshots[index + 1 :]:
+            candidate_time = item_time(candidate)
+            if candidate_time and (candidate_time - entry_time).total_seconds() >= horizon_minutes * 60:
+                exit_item = candidate
+                break
+        if exit_item is None:
+            continue
+        entry_rows = rows_by_symbol(entry)
+        exit_rows = rows_by_symbol(exit_item)
+        longs = [row for row in entry_rows.values() if row.get("long_candidate")]
+        shorts = [row for row in entry_rows.values() if row.get("short_candidate")]
+        if not longs or not shorts:
+            continue
+        long_row = max(longs, key=lambda row: Decimal(str(row.get("relative_score") or 0)))
+        short_row = min(shorts, key=lambda row: Decimal(str(row.get("relative_score") or 0)))
+        long_symbol = str(long_row.get("symbol"))
+        short_symbol = str(short_row.get("symbol"))
+        if long_symbol not in exit_rows or short_symbol not in exit_rows:
+            continue
+        long_entry = row_price(long_row)
+        short_entry = row_price(short_row)
+        long_exit = row_price(exit_rows[long_symbol])
+        short_exit = row_price(exit_rows[short_symbol])
+        if not long_entry or not short_entry or not long_exit or not short_exit:
+            continue
+        long_return = ((long_exit - long_entry) / long_entry) * Decimal("100")
+        short_return = ((short_exit - short_entry) / short_entry) * Decimal("100")
+        relative_return = long_return - short_return
+        pnl_after_cost = relative_return - assumed_cost_pct
+        trades.append(
+            {
+                "entry_time": entry_time,
+                "exit_time": item_time(exit_item),
+                "long_symbol": long_symbol,
+                "short_symbol": short_symbol,
+                "long_score": Decimal(str(long_row.get("relative_score") or 0)),
+                "short_score": Decimal(str(short_row.get("relative_score") or 0)),
+                "long_return_pct": long_return,
+                "short_return_pct": short_return,
+                "relative_return_pct": relative_return,
+                "pnl_after_cost_pct": pnl_after_cost,
+                "win": pnl_after_cost > 0,
+                "long_parts": long_row.get("score_parts", {}),
+                "short_parts": short_row.get("score_parts", {}),
+            }
+        )
+
+    if not trades:
+        return {"status": "not_enough_trades", "sample_count": len(snapshots), "trade_count": 0}
+
+    wins = [trade for trade in trades if trade["win"]]
+    losses = [trade for trade in trades if not trade["win"]]
+    total = sum((Decimal(str(trade["pnl_after_cost_pct"])) for trade in trades), Decimal("0"))
+    average = total / Decimal(str(len(trades)))
+
+    def average_part(side: str, key: str, subset: list[dict[str, Any]]) -> Decimal:
+        values = []
+        part_key = f"{side}_parts"
+        for trade in subset:
+            parts = trade.get(part_key) or {}
+            if parts.get(key) is None:
+                continue
+            try:
+                values.append(Decimal(str(parts[key])))
+            except Exception:
+                continue
+        return sum(values) / Decimal(str(len(values))) if values else Decimal("0")
+
+    keys = ["1h_return_rank", "4h_return_rank", "1h_volume", "4h_volume", "bid_ask_depth_pressure", "ema20_position", "relative_rank", "rsi_overheat", "price_surge"]
+    factor_summary = [
+        {
+            "key": key,
+            "win_long_avg": average_part("long", key, wins),
+            "loss_long_avg": average_part("long", key, losses),
+            "win_short_avg": average_part("short", key, wins),
+            "loss_short_avg": average_part("short", key, losses),
+        }
+        for key in keys
+    ]
+    return to_jsonable(
+        {
+            "status": "ok",
+            "sample_count": len(snapshots),
+            "trade_count": len(trades),
+            "horizon_minutes": horizon_minutes,
+            "assumed_cost_pct": assumed_cost_pct,
+            "win_count": len(wins),
+            "loss_count": len(losses),
+            "win_rate_pct": (Decimal(str(len(wins))) / Decimal(str(len(trades)))) * Decimal("100"),
+            "avg_pnl_after_cost_pct": average,
+            "best": max(trades, key=lambda trade: trade["pnl_after_cost_pct"]),
+            "worst": min(trades, key=lambda trade: trade["pnl_after_cost_pct"]),
+            "recent_trades": trades[-30:],
+            "factor_summary": factor_summary,
+        }
+    )
 
 
 def has_private_credentials(exchange_id: str) -> bool:
@@ -1850,10 +1998,19 @@ class BotRuntime:
         self.relative_rankings = self._build_relative_rankings()
         feature_item = {
             "timestamp": datetime.now(timezone.utc),
-            "features": self.relative_rankings.get("features", []),
+            "features": [self._slim_learning_feature(row) for row in self.relative_rankings.get("features", [])],
         }
         self.relative_feature_history.append(to_jsonable(feature_item))
         append_jsonl(RELATIVE_FEATURE_LOG_PATH, feature_item)
+
+    def _slim_learning_feature(self, row: dict[str, Any]) -> dict[str, Any]:
+        heavy_keys = {
+            "volume_since_9jst",
+            "price_return_since_9jst_series",
+            "price_return_since_9jst_times",
+            "price_candles",
+        }
+        return {key: value for key, value in row.items() if key not in heavy_keys}
 
     def _relative_returns(self, lookback_minutes: int = 60) -> list[dict[str, Any]]:
         if len(self.relative_history) < 2:
@@ -3096,6 +3253,17 @@ async def get_history(limit: int = 200):
             "historical_candles": str(HISTORICAL_CANDLE_LOG_PATH),
         },
     }
+
+
+@app.get("/api/relative/learning-report")
+async def get_relative_learning_report(limit: int = 500, horizon_minutes: int = 30, assumed_cost_pct: float = 0.10):
+    memory_snapshots = list(runtime.relative_feature_history)[-limit:]
+    return relative_learning_report(
+        limit=max(50, min(limit, 5000)),
+        horizon_minutes=max(1, min(horizon_minutes, 240)),
+        assumed_cost_pct=Decimal(str(assumed_cost_pct)),
+        snapshots=memory_snapshots if memory_snapshots else None,
+    )
 
 
 @app.get("/api/history/app-log.txt")

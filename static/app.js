@@ -48,11 +48,13 @@ const relativeWeakEl = document.querySelector("#relative-weak");
 const relativeAllEl = document.querySelector("#relative-all");
 const relativePositionsEl = document.querySelector("#relative-positions");
 const relativeTradesEl = document.querySelector("#relative-trades");
+const relativeLearningReportEl = document.querySelector("#relative-learning-report");
 
 let settingsApplied = false;
 let relativeSelectionTouched = false;
 let openChartSymbol = "";
 let openChartData = null;
+let lastLearningReportAt = 0;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -400,6 +402,36 @@ function renderRelativePositions(positions) {
   }).join("");
 }
 
+function renderLearningReport(report) {
+  if (!relativeLearningReportEl) return;
+  if (!report || report.status !== "ok") {
+    relativeLearningReportEl.className = "ranking-list empty";
+    relativeLearningReportEl.textContent = report?.message || "データが貯まると表示します";
+    return;
+  }
+  relativeLearningReportEl.className = "ranking-list";
+  const factors = (report.factor_summary || []).slice(0, 5);
+  relativeLearningReportEl.innerHTML = `
+    <article class="score-row learning-row">
+      <strong>Win ${numberText(report.win_rate_pct, 1)}%</strong>
+      <span>${report.win_count}/${report.trade_count}</span>
+      <span>Avg ${numberText(report.avg_pnl_after_cost_pct, 3)}%</span>
+      <span>${report.horizon_minutes}min</span>
+      <span>Cost ${numberText(report.assumed_cost_pct, 3)}%</span>
+      <span>Samples ${report.sample_count}</span>
+    </article>
+    ${factors.map((factor) => `
+      <article class="score-row learning-row">
+        <strong>${escapeHtml(factor.key)}</strong>
+        <span>WL ${numberText(factor.win_long_avg, 2)}</span>
+        <span>LL ${numberText(factor.loss_long_avg, 2)}</span>
+        <span>WS ${numberText(factor.win_short_avg, 2)}</span>
+        <span>LS ${numberText(factor.loss_short_avg, 2)}</span>
+      </article>
+    `).join("")}
+  `;
+}
+
 async function toggleRelativeChart(symbol) {
   if (openChartSymbol === symbol) {
     openChartSymbol = "";
@@ -570,6 +602,13 @@ function renderState(state) {
   renderRelativeList(relativeWeakEl, state.relative_rankings?.weak || [], "履歴が貯まると表示します");
   renderRelativeAllScores(relativeAllEl, state.relative_rankings?.features || [], "履歴が貯まると表示します");
   renderRelativePositions(state.relative_positions || []);
+  if (relativeLearningReportEl && Date.now() - lastLearningReportAt > 60000) {
+    lastLearningReportAt = Date.now();
+    fetch("/api/relative/learning-report?limit=800&horizon_minutes=30&assumed_cost_pct=0.10")
+      .then((response) => response.json())
+      .then(renderLearningReport)
+      .catch(() => renderLearningReport(null));
+  }
 
   renderRelativeTrades(state.relative_closed_trades || []);
   const candleStatus = state.historical_candle_status || {};
