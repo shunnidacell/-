@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Futures Spread Research</title>
-    <link rel="stylesheet" href="/static/styles.css?v=click-chart" />
+    <link rel="stylesheet" href="/static/styles.css?v=relative-cleanup2" />
   </head>
   <body>
     <header class="app-header">
@@ -79,8 +79,8 @@
           </form>
         </section>
 
-          <h3 class="subhead">相対強弱 結果</h3>
-          <div class="table-wrap">
+          <h3 class="subhead" style="display:none">相対強弱 結果</h3>
+          <div class="table-wrap hidden" style="display:none">
             <table>
               <thead>
                 <tr>
@@ -92,7 +92,7 @@
                   <th>損益</th>
                 </tr>
               </thead>
-              <tbody id="relative-trades"></tbody>
+              <tbody id="relative-trades-old"></tbody>
             </table>
           </div>
         </section>
@@ -140,7 +140,7 @@
           <div class="load-bar"><div id="load-bar-fill"></div></div>
         </section>
 
-        <section class="panel">
+        <section class="panel hidden" style="display:none">
           <div class="section-title">
             <h2>アビトラ監視銘柄</h2>
             <span id="active-symbols-meta">履歴で自動選定</span>
@@ -148,7 +148,7 @@
           <div id="active-symbols" class="symbol-chip-list empty">起動後に表示します</div>
         </section>
 
-        <section class="panel hero-panel">
+        <section class="panel hero-panel hidden" style="display:none">
           <div class="section-title">
             <h2>先物価格差サマリー</h2>
             <span id="last-tick">未取得</span>
@@ -157,7 +157,7 @@
         </section>
 
         <section class="dashboard-grid">
-          <section class="panel">
+          <section class="panel hidden" style="display:none">
             <div class="section-title">
               <h2>先物価格差ランキング</h2>
               <span>Gross / Cost / Net</span>
@@ -165,7 +165,7 @@
             <div id="futures-spread-research" class="ranking-list empty">開始後に表示します</div>
           </section>
 
-          <section class="panel">
+          <section class="panel hidden" style="display:none">
             <div class="section-title">
               <h2>建玉</h2>
               <button type="button" id="demo-arb-history-button">デモ履歴を見る</button>
@@ -207,6 +207,22 @@
           </div>
           <h3 class="subhead">相対強弱 建玉</h3>
           <div id="relative-positions" class="ranking-list empty">現在の建玉はありません</div>
+          <h3 class="subhead">Relative History</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>Long</th>
+                  <th>Short</th>
+                  <th>Result</th>
+                  <th>Relative</th>
+                  <th>PnL</th>
+                </tr>
+              </thead>
+              <tbody id="relative-trades"></tbody>
+            </table>
+          </div>
         </section>
 
         <section class="panel">
@@ -234,7 +250,7 @@
           </div>
         </section>
 
-        <section class="panel">
+        <section class="panel hidden" style="display:none">
           <div class="section-title">
             <h2>リアルタイム先物価格</h2>
             <span>Bid / Ask / Mid</span>
@@ -369,6 +385,6 @@
       </section>
     </div>
 
-    <script src="/static/app.js?v=click-chart"></script>
+    <script src="/static/app.js?v=relative-cleanup2"></script>
   </body>
 </html>
