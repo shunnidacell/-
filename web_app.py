@@ -1817,19 +1817,33 @@ class BotRuntime:
         start_jst = latest_jst.replace(hour=9, minute=0, second=0, microsecond=0)
         if latest_jst < start_jst:
             start_jst -= timedelta(days=1)
+        base_price = None
+        chart_start = max(start_jst, latest_jst - timedelta(hours=2))
         prices = []
         for item in self.relative_history:
             item_time = datetime.fromisoformat(item["timestamp"]).astimezone(jst)
             if item_time >= start_jst and symbol in item.get("mids", {}):
                 price = Decimal(str(item["mids"][symbol]))
-                if price > 0:
+                if price > 0 and base_price is None:
+                    base_price = price
+                if price > 0 and item_time >= chart_start:
                     prices.append(price)
-        if not prices:
+        if not prices or base_price is None:
             return []
-        base = prices[0]
-        if base <= 0:
+        if base_price <= 0:
             return []
-        return [((price - base) / base) * Decimal("100") for price in prices[-240:]]
+        series = [((price - base_price) / base_price) * Decimal("100") for price in prices]
+        if len(series) <= 120:
+            return series
+        step = len(series) / Decimal("120")
+        sampled = []
+        index = Decimal("0")
+        while int(index) < len(series) and len(sampled) < 120:
+            sampled.append(series[int(index)])
+            index += step
+        if sampled and sampled[-1] != series[-1]:
+            sampled[-1] = series[-1]
+        return sampled
 
     def _smoothed_relative_score(self, symbol: str, current_score: Decimal, lookback_items: int = 12) -> Decimal:
         scores = [current_score]

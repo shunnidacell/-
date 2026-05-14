@@ -232,13 +232,12 @@ function renderRelativeList(target, rows, emptyText) {
           <strong>${escapeHtml(item.symbol)}</strong>
           <div class="pct-strip">
             ${pctBadge("9時", item.return_since_9jst_pct)}
-            ${pctBadge("1h", item.return_1h_pct)}
-            ${pctBadge("4h", item.return_4h_pct)}
           </div>
           <span>Score ${numberText(item.relative_score, 2)} / raw ${numberText(item.raw_relative_score, 2)} / 出来高増 ${numberText(item.volume_growth_pct, 2)}% → ${numberText(item.volume_growth_score_pct, 2)}%</span>
           <span>RSI ${numberText(item.rsi, 1)} / ATR ${numberText(item.atr_pct, 3)}% / EMA ${numberText(item.ema_trend_pct, 3)}%</span>
         </div>
         <div class="mini-volume-chart ${Number(item.return_since_9jst_pct || 0) >= 0 ? "positive" : "negative"}">
+          <span>2h / 9時=0%</span>
           <svg viewBox="0 0 100 28" preserveAspectRatio="none" aria-label="9時を0%にした価格推移">
             <line x1="0" y1="${zeroY.toFixed(1)}" x2="100" y2="${zeroY.toFixed(1)}"></line>
             <polyline points="${points}"></polyline>
@@ -343,14 +342,14 @@ function renderRelativeSelectors(state) {
   if (strongSymbols.length) {
     relativeSymbolEl.innerHTML = strongSymbols.map((symbol) => {
       const row = strong.find((item) => item.symbol === symbol);
-      const label = row ? `${symbol}  1h ${numberText(row.return_1h_pct)}%` : symbol;
+      const label = row ? `${symbol}  9時 ${numberText(row.return_since_9jst_pct)}%` : symbol;
       return optionHtml(symbol, label);
     }).join("");
   }
   if (weakSymbols.length) {
     relativeShortSymbolsEl.innerHTML = weakSymbols.map((symbol, index) => {
       const row = weak.find((item) => item.symbol === symbol);
-      const label = row ? `${symbol}  1h ${numberText(row.return_1h_pct)}%` : symbol;
+      const label = row ? `${symbol}  9時 ${numberText(row.return_since_9jst_pct)}%` : symbol;
       return `<option value="${escapeHtml(symbol)}" ${index === 0 ? "selected" : ""}>${escapeHtml(label)}</option>`;
     }).join("");
   }

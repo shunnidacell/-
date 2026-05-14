@@ -649,7 +649,7 @@ select:focus {
 }
 
 .ranking-row.relative-row {
-  grid-template-columns: minmax(0, 1.45fr) minmax(120px, 0.75fr) 92px;
+  grid-template-columns: minmax(0, 1.25fr) minmax(220px, 1fr) 92px;
 }
 
 .ranking-row.positive-rank {
@@ -678,20 +678,28 @@ select:focus {
 .pct-badge {
   display: inline-flex;
   width: fit-content;
-  padding: 3px 7px;
+  padding: 5px 9px;
   border-radius: 8px;
   background: var(--surface);
-  font-size: 12px;
+  font-size: 15px;
   font-weight: 900;
 }
 
 .mini-volume-chart {
-  min-width: 120px;
+  min-width: 220px;
+}
+
+.mini-volume-chart span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
 }
 
 .mini-volume-chart svg {
   width: 100%;
-  height: 44px;
+  height: 72px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
