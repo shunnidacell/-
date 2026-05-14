@@ -1217,6 +1217,12 @@ class BotRuntime:
         exchanges = [exchange.lower() for exchange in parse_csv(request.exchanges or self.settings.futures_exchanges)]
         if not symbols or not exchanges:
             raise HTTPException(status_code=400, detail="symbols and exchanges are required")
+        if self._should_use_common_futures(symbols):
+            symbols = list(self.futures_base_symbols)
+            if not symbols:
+                symbols = await self._discover_common_futures_symbols(exchanges)
+        if not symbols:
+            raise HTTPException(status_code=400, detail="no futures symbols found")
         timeframe_ms = self._timeframe_ms(request.timeframe)
         if request.start_date:
             start_dt = datetime.fromisoformat(request.start_date).replace(tzinfo=timezone.utc)
