@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Futures Spread Research</title>
-    <link rel="stylesheet" href="/static/styles.css?v=relative-depth-pressure" />
+    <link rel="stylesheet" href="/static/styles.css?v=relative-light-scores" />
   </head>
   <body>
     <header class="app-header">
@@ -179,6 +179,8 @@
             <h2>相対強弱デモ</h2>
             <span>選んだ銘柄をロング / 弱い銘柄をショート</span>
           </div>
+          <h3 class="subhead">Relative Positions</h3>
+          <div id="relative-positions" class="ranking-list empty">現在の建玉はありません</div>
           <div class="relative-controls">
             <label>
               <span>強い銘柄 Long</span>
@@ -205,8 +207,6 @@
               <div id="relative-weak" class="ranking-list empty">履歴が貯まると表示します</div>
             </div>
           </div>
-          <h3 class="subhead">相対強弱 建玉</h3>
-          <div id="relative-positions" class="ranking-list empty">現在の建玉はありません</div>
           <h3 class="subhead">All Symbols Score Breakdown</h3>
           <div id="relative-all" class="ranking-list empty">履歴が貯まると表示します</div>
           <h3 class="subhead">Relative History</h3>
@@ -387,6 +387,6 @@
       </section>
     </div>
 
-    <script src="/static/app.js?v=relative-depth-pressure"></script>
+    <script src="/static/app.js?v=relative-light-scores"></script>
   </body>
 </html>

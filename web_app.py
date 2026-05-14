@@ -2107,7 +2107,7 @@ class BotRuntime:
             "exchange": item.get("exchange_id") or "",
         }
 
-    def _smoothed_relative_score(self, symbol: str, current_score: Decimal, lookback_items: int = 12) -> Decimal:
+    def _smoothed_relative_score(self, symbol: str, current_score: Decimal, lookback_items: int = 30) -> Decimal:
         scores = [current_score]
         for item in list(self.relative_feature_history)[-lookback_items:]:
             for row in item.get("features", []):

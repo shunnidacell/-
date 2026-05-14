@@ -337,6 +337,37 @@ function renderRelativeList(target, rows, emptyText, limit = 6) {
   }).join("");
 }
 
+function renderRelativeAllScores(target, rows, emptyText) {
+  if (!target) return;
+  const items = rows || [];
+  if (!items.length) {
+    target.className = "ranking-list empty";
+    target.textContent = emptyText;
+    return;
+  }
+  target.className = "ranking-list all-score-list";
+  target.innerHTML = items.map((item) => {
+    const parts = item.score_parts || {};
+    const pnlClass = Number(item.relative_score || 0) >= 0 ? "positive" : "negative";
+    const exclusions = (item.exclude_reasons || []).length ? item.exclude_reasons.join(", ") : "none";
+    return `
+      <article class="score-row">
+        <strong>${escapeHtml(item.symbol)}</strong>
+        <span class="${pnlClass}">${numberText(item.relative_score, 2)}pt</span>
+        <span>raw ${numberText(item.raw_relative_score, 2)}</span>
+        <span>1hRet ${numberText(parts["1h_return_rank"], 2)}</span>
+        <span>4hRet ${numberText(parts["4h_return_rank"], 2)}</span>
+        <span>1hLiq ${numberText(parts["1h_volume"], 2)}</span>
+        <span>4hLiq ${numberText(parts["4h_volume"], 2)}</span>
+        <span>Depth ${numberText(parts.bid_ask_depth_pressure, 2)}</span>
+        <span>EMA ${numberText(parts.ema20_position, 2)}</span>
+        <span>Penalty ${numberText(Number(parts.rsi_overheat || 0) + Number(parts.price_surge || 0) + Number(parts.funding_overheat || 0), 2)}</span>
+        <span>Excl ${escapeHtml(exclusions)}</span>
+      </article>
+    `;
+  }).join("");
+}
+
 function renderRelativePositions(positions) {
   if (!relativePositionsEl) return;
   if (!positions || !positions.length) {
@@ -536,7 +567,7 @@ function renderState(state) {
   renderPositions(state.futures_positions || []);
   renderRelativeList(relativeStrongEl, state.relative_rankings?.strong || [], "履歴が貯まると表示します");
   renderRelativeList(relativeWeakEl, state.relative_rankings?.weak || [], "履歴が貯まると表示します");
-  renderRelativeList(relativeAllEl, state.relative_rankings?.features || [], "履歴が貯まると表示します", 200);
+  renderRelativeAllScores(relativeAllEl, state.relative_rankings?.features || [], "履歴が貯まると表示します");
   renderRelativePositions(state.relative_positions || []);
 
   renderRelativeTrades(state.relative_closed_trades || []);
