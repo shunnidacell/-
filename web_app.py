@@ -40,6 +40,7 @@ APP_LOG_PATH = LOG_DIR / "app.log"
 TRADE_LOG_PATH = LOG_DIR / "trades.jsonl"
 SPREAD_LOG_PATH = LOG_DIR / "spread_history.jsonl"
 FUTURES_SPREAD_LOG_PATH = LOG_DIR / "futures_spread_history.jsonl"
+FUTURES_PAPER_DEMO_LOG_PATH = LOG_DIR / "futures_paper_demo.jsonl"
 HISTORICAL_CANDLE_LOG_PATH = LOG_DIR / "historical_candles.jsonl"
 LIVE_CONFIRM_TEXT = "I_UNDERSTAND_REAL_ORDERS"
 
@@ -1907,6 +1908,25 @@ class BotRuntime:
         quote_amount = Decimal(os.getenv("FUTURES_PAPER_QUOTE", "10"))
         now = datetime.now(timezone.utc)
 
+        def record_paper_event(action: str, symbol: str, point: dict[str, Any], payload: dict[str, Any]) -> None:
+            append_jsonl(
+                FUTURES_PAPER_DEMO_LOG_PATH,
+                {
+                    "timestamp": now,
+                    "mode": "futures_paper_demo",
+                    "action": action,
+                    "symbol": symbol,
+                    "direction": point.get("direction", ""),
+                    "entry_threshold_pct": entry_threshold,
+                    "spread_pct": point.get("spread_pct"),
+                    "executable_spread_pct": point.get("executable_spread_pct"),
+                    "net_spread_pct": point.get("net_spread_pct"),
+                    "round_trip_cost_pct": point.get("round_trip_cost_pct"),
+                    "capacity_quote": point.get("capacity_quote"),
+                    **payload,
+                },
+            )
+
         for point in points:
             symbol = point["symbol"]
             if not point.get("is_executable"):
@@ -1928,6 +1948,17 @@ class BotRuntime:
                         "max_expected_spread_pct": max_expected_spread,
                         "risk_mode": "no_stop_wait_reversion",
                     }
+                    record_paper_event(
+                        "entry",
+                        symbol,
+                        point,
+                        {
+                            "quote_amount": quote_amount,
+                            "avg_entry_spread_pct": spread,
+                            "add_count": 0,
+                            "unrealized_profit": Decimal("0"),
+                        },
+                    )
                     self.log("paper", f"FUTURES PAPER entry {symbol}: {spread:.4f}% {point.get('direction', '')}")
                 continue
 
@@ -1951,6 +1982,18 @@ class BotRuntime:
                 self.log(
                     "paper",
                     f"FUTURES PAPER add{position['add_count']} {symbol}: {spread:.4f}% avg {position['entry_spread_pct']:.4f}%",
+                )
+                record_paper_event(
+                    "add",
+                    symbol,
+                    point,
+                    {
+                        "quote_amount": position["quote_amount"],
+                        "avg_entry_spread_pct": position["entry_spread_pct"],
+                        "add_count": position["add_count"],
+                        "unrealized_profit": Decimal(str(position["quote_amount"]))
+                        * ((Decimal(str(position["entry_spread_pct"])) - spread) / Decimal("100")),
+                    },
                 )
 
             should_take_profit = spread <= take_profit_threshold
@@ -1986,6 +2029,21 @@ class BotRuntime:
             self.futures_closed_trades.appendleft(json_trade)
             self.demo.trades.appendleft(json_trade)
             append_jsonl(TRADE_LOG_PATH, trade)
+            record_paper_event(
+                "exit",
+                symbol,
+                point,
+                {
+                    "quote_amount": amount,
+                    "avg_entry_spread_pct": entry,
+                    "exit_spread_pct": spread,
+                    "net_profit_pct": entry - spread,
+                    "profit_quote": profit,
+                    "held_minutes": held_minutes,
+                    "add_count": position["add_count"],
+                    "status": trade["status"],
+                },
+            )
             self.demo.realized_profit += profit
             self.demo.cash += profit
             self.log("paper", f"FUTURES PAPER exit {symbol}: entry {entry:.4f}% exit {spread:.4f}% pnl {profit:.4f}")
@@ -2054,6 +2112,7 @@ class BotRuntime:
             "trades": list(self.demo.trades),
             "futures_positions": to_jsonable(list(self.futures_positions.values())),
             "futures_closed_trades": list(self.futures_closed_trades),
+            "futures_paper_demo_events": list(reversed(read_tail_jsonl(FUTURES_PAPER_DEMO_LOG_PATH, 100))),
             "futures_paper_pnl": to_jsonable(
                 {
                     "realized": self.futures_realized_profit,
@@ -2127,12 +2186,14 @@ async def get_history(limit: int = 200):
         "trades": list(reversed(read_tail_jsonl(TRADE_LOG_PATH, limit))),
         "spread_history": list(reversed(read_tail_jsonl(SPREAD_LOG_PATH, limit))),
         "futures_spread_history": list(reversed(read_tail_jsonl(FUTURES_SPREAD_LOG_PATH, limit))),
+        "futures_paper_demo": list(reversed(read_tail_jsonl(FUTURES_PAPER_DEMO_LOG_PATH, limit))),
         "futures_event_report": futures_event_report(limit=limit),
         "files": {
             "app_log": str(APP_LOG_PATH),
             "trades": str(TRADE_LOG_PATH),
             "spread_history": str(SPREAD_LOG_PATH),
             "futures_spread_history": str(FUTURES_SPREAD_LOG_PATH),
+            "futures_paper_demo": str(FUTURES_PAPER_DEMO_LOG_PATH),
             "historical_candles": str(HISTORICAL_CANDLE_LOG_PATH),
         },
     }

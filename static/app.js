@@ -22,6 +22,7 @@ const positionsEl = document.querySelector("#futures-positions");
 const historyRefreshButton = document.querySelector("#history-refresh-button");
 const historyAppLogEl = document.querySelector("#history-app-log");
 const historyTradesEl = document.querySelector("#history-trades");
+const historyFuturesPaperEl = document.querySelector("#history-futures-paper");
 const historyFilesEl = document.querySelector("#history-files");
 const historicalCandlesButton = document.querySelector("#historical-candles-button");
 const historicalCandlesStatusEl = document.querySelector("#historical-candles-status");
@@ -451,6 +452,23 @@ async function loadHistory() {
   if (!historyTradesEl.innerHTML) {
     historyTradesEl.innerHTML = `<tr><td colspan="6" class="empty-cell">決済履歴はまだありません</td></tr>`;
   }
+  if (historyFuturesPaperEl) {
+    historyFuturesPaperEl.innerHTML = (history.futures_paper_demo || []).map((event) => `
+      <tr>
+        <td>${event.timestamp ? new Date(event.timestamp).toLocaleString() : "-"}</td>
+        <td>${escapeHtml(event.action || "-")}</td>
+        <td>${escapeHtml(event.symbol || "-")}</td>
+        <td>${escapeHtml(event.direction || "-")}</td>
+        <td>${moneyText(event.quote_amount)}</td>
+        <td>${numberText(event.net_spread_pct)}%</td>
+        <td>${numberText(event.round_trip_cost_pct)}%</td>
+        <td class="${Number(event.profit_quote || event.unrealized_profit || 0) >= 0 ? "positive" : "negative"}">${Number(event.profit_quote || event.unrealized_profit || 0) >= 0 ? "+" : ""}${moneyText(event.profit_quote || event.unrealized_profit || 0)}</td>
+      </tr>
+    `).join("");
+    if (!historyFuturesPaperEl.innerHTML) {
+      historyFuturesPaperEl.innerHTML = `<tr><td colspan="8" class="empty-cell">増やしたデモ取引の記録はまだありません</td></tr>`;
+    }
+  }
   eventReportEl.innerHTML = (history.futures_event_report || []).map((event) => `
     <tr>
       <td>${event.entry_time ? new Date(event.entry_time).toLocaleString() : "-"}</td>
@@ -469,7 +487,7 @@ async function loadHistory() {
   }
   const files = history.files || {};
   historyFilesEl.innerHTML = `
-    保存先: ${escapeHtml(files.app_log || "")} / ${escapeHtml(files.trades || "")} / ${escapeHtml(files.futures_spread_history || "")}
+    保存先: ${escapeHtml(files.app_log || "")} / ${escapeHtml(files.trades || "")} / ${escapeHtml(files.futures_paper_demo || "")} / ${escapeHtml(files.futures_spread_history || "")}
     <a href="/api/history/app-log.txt" target="_blank" rel="noreferrer">app.logを開く</a>
   `;
 }
