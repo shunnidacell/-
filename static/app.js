@@ -271,6 +271,7 @@ function renderActiveSymbols(state, perf) {
   const symbols = state.futures_active_symbols || [];
   const baseCount = state.futures_base_symbols?.length || perf.base_symbol_count || symbols.length;
   const activeCount = perf.active_symbol_count || symbols.length;
+  const boostSymbols = new Set(state.futures_boost_symbols || []);
   if (activeSymbolsMetaEl) {
     activeSymbolsMetaEl.textContent = `${activeCount}銘柄 / 候補${baseCount}銘柄`;
   }
@@ -280,7 +281,10 @@ function renderActiveSymbols(state, perf) {
     return;
   }
   activeSymbolsEl.className = "symbol-chip-list";
-  activeSymbolsEl.innerHTML = symbols.map((symbol) => `<span class="symbol-chip">${escapeHtml(symbol)}</span>`).join("");
+  if (activeSymbolsMetaEl) {
+    activeSymbolsMetaEl.textContent = `${activeCount}銘柄 / 候補${baseCount}銘柄 / 高速${boostSymbols.size}銘柄`;
+  }
+  activeSymbolsEl.innerHTML = symbols.map((symbol) => `<span class="symbol-chip ${boostSymbols.has(symbol) ? "boost" : ""}">${escapeHtml(symbol)}</span>`).join("");
 }
 
 function optionHtml(symbol, label = symbol) {

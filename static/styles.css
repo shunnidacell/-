@@ -468,6 +468,12 @@ select:focus {
   font-weight: 800;
 }
 
+.symbol-chip.boost {
+  border-color: var(--amber);
+  background: var(--warn-bg);
+  color: var(--amber);
+}
+
 .relative-controls {
   display: grid;
   grid-template-columns: minmax(180px, 1fr) minmax(220px, 1.3fr) minmax(120px, 0.6fr) auto auto;

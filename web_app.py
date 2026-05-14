@@ -525,6 +525,7 @@ class BotRuntime:
         self.futures_perf: dict[str, Any] = {}
         self.futures_base_symbols: list[str] = []
         self.futures_active_symbols: list[str] = []
+        self.futures_boost_symbols: dict[str, datetime] = {}
         self.balances: list[dict[str, Any]] = []
         self.exchange_handles: dict[str, Any] = {}
         self.preflight_results: list[dict[str, Any]] = []
@@ -638,7 +639,8 @@ class BotRuntime:
             while self.stop_event and not self.stop_event.is_set():
                 active_symbols = self._select_hot_futures_symbols(config.symbols)
                 self.futures_active_symbols = active_symbols
-                scan_config = replace(config, symbols=active_symbols)
+                wait_seconds = self._adaptive_futures_poll_seconds(config)
+                scan_config = replace(config, symbols=active_symbols, poll_seconds=wait_seconds)
                 await self._record_futures_spread_history(futures_exchanges, scan_config)
                 latest = self.futures_spread_history[-1] if self.futures_spread_history else {"points": []}
                 self.quotes = []
@@ -647,6 +649,7 @@ class BotRuntime:
                 self.last_tick = datetime.now().astimezone().isoformat()
 
                 if latest.get("points"):
+                    self._update_futures_boost_symbols(latest["points"])
                     best = latest["points"][0]
                     self.log(
                         "futures",
@@ -659,7 +662,7 @@ class BotRuntime:
                     self.log("futures", "No futures spread data")
 
                 try:
-                    await asyncio.wait_for(self.stop_event.wait(), timeout=config.poll_seconds)
+                    await asyncio.wait_for(self.stop_event.wait(), timeout=wait_seconds)
                 except asyncio.TimeoutError:
                     pass
         except Exception as exc:
@@ -668,6 +671,33 @@ class BotRuntime:
         finally:
             self.stopped_at = datetime.now().astimezone().isoformat()
             self.log("info", "Futures research stopped")
+
+    def _adaptive_futures_poll_seconds(self, config: Config) -> float:
+        now = datetime.now(timezone.utc)
+        self.futures_boost_symbols = {
+            symbol: expires_at for symbol, expires_at in self.futures_boost_symbols.items() if expires_at > now
+        }
+        if self.futures_boost_symbols or self.futures_positions:
+            try:
+                return max(1.0, float(os.getenv("FUTURES_BOOST_POLL_SECONDS", "1")))
+            except ValueError:
+                return 1.0
+        return float(config.poll_seconds)
+
+    def _update_futures_boost_symbols(self, points: list[dict[str, Any]]) -> None:
+        net_threshold = Decimal(os.getenv("FUTURES_BOOST_NET_SPREAD_PCT", "0.25"))
+        gross_threshold = Decimal(os.getenv("FUTURES_BOOST_GROSS_SPREAD_PCT", "0.6"))
+        ttl_seconds = int(os.getenv("FUTURES_BOOST_TTL_SECONDS", "180"))
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
+        for point in points:
+            symbol = str(point.get("symbol", ""))
+            if not symbol:
+                continue
+            net = point.get("net_spread_pct")
+            gross = Decimal(str(point.get("spread_pct") or 0))
+            net_value = Decimal(str(net)) if net is not None else Decimal("-999")
+            if net_value >= net_threshold or gross >= gross_threshold:
+                self.futures_boost_symbols[symbol] = expires_at
 
     def _select_hot_futures_symbols(self, symbols: list[str]) -> list[str]:
         if not symbols:
@@ -683,6 +713,7 @@ class BotRuntime:
             return list(symbols)
 
         forced = {position.get("symbol") for position in self.futures_positions.values() if position.get("symbol")}
+        forced.update(self.futures_boost_symbols.keys())
         for position in self.relative_positions.values():
             if position.get("long_symbol"):
                 forced.add(position["long_symbol"])
@@ -2010,6 +2041,7 @@ class BotRuntime:
             "futures_perf": to_jsonable(self.futures_perf),
             "futures_base_symbols": self.futures_base_symbols,
             "futures_active_symbols": self.futures_active_symbols,
+            "futures_boost_symbols": sorted(self.futures_boost_symbols.keys()),
             "relative_rankings": self.relative_rankings,
             "relative_positions": to_jsonable(list(self.relative_positions.values())),
             "relative_closed_trades": list(self.relative_closed_trades),
