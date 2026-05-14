@@ -215,9 +215,11 @@ function renderRelativeList(target, rows, emptyText) {
     <article class="ranking-row">
       <div>
         <strong>${escapeHtml(item.symbol)}</strong>
+        <span>Score ${numberText(item.relative_score, 2)} / 9時 ${numberText(item.return_since_9jst_pct)}%</span>
         <span>1h ${numberText(item.return_1h_pct)}% / 4h ${numberText(item.return_4h_pct)}%</span>
+        <span>RSI ${numberText(item.rsi, 1)} / ATR ${numberText(item.atr_pct, 3)}% / EMA ${numberText(item.ema_trend_pct, 3)}%</span>
       </div>
-      <div class="rank-net ${Number(item.return_1h_pct) >= 0 ? "positive" : "negative"}">${numberText(item.return_1h_pct)}%</div>
+      <div class="rank-net ${Number(item.relative_score) >= 0 ? "positive" : "negative"}">${numberText(item.relative_score, 2)}pt</div>
     </article>
   `).join("");
 }

@@ -41,6 +41,7 @@ TRADE_LOG_PATH = LOG_DIR / "trades.jsonl"
 SPREAD_LOG_PATH = LOG_DIR / "spread_history.jsonl"
 FUTURES_SPREAD_LOG_PATH = LOG_DIR / "futures_spread_history.jsonl"
 FUTURES_PAPER_DEMO_LOG_PATH = LOG_DIR / "futures_paper_demo.jsonl"
+RELATIVE_FEATURE_LOG_PATH = LOG_DIR / "relative_features.jsonl"
 HISTORICAL_CANDLE_LOG_PATH = LOG_DIR / "historical_candles.jsonl"
 LIVE_CONFIRM_TEXT = "I_UNDERSTAND_REAL_ORDERS"
 
@@ -537,6 +538,7 @@ class BotRuntime:
         self.futures_unrealized_profit = Decimal("0")
         self.futures_realized_profit = Decimal("0")
         self.relative_history: deque[dict[str, Any]] = deque(maxlen=240)
+        self.relative_feature_history: deque[dict[str, Any]] = deque(maxlen=240)
         self.relative_rankings: dict[str, Any] = {}
         self.relative_positions: dict[str, dict[str, Any]] = {}
         self.relative_closed_trades: deque[dict[str, Any]] = deque(maxlen=200)
@@ -1641,8 +1643,13 @@ class BotRuntime:
 
     def _record_relative_snapshot(self, quotes: list[dict[str, Any]]) -> None:
         by_symbol: dict[str, list[Decimal]] = {}
+        liquidity_by_symbol: dict[str, Decimal] = {}
         for quote in quotes:
             by_symbol.setdefault(quote["symbol"], []).append(Decimal(str(quote["mid"])))
+            bid_cap = Decimal(str(quote.get("bid_capacity_quote") or 0))
+            ask_cap = Decimal(str(quote.get("ask_capacity_quote") or 0))
+            capacity = min(bid_cap, ask_cap)
+            liquidity_by_symbol[quote["symbol"]] = liquidity_by_symbol.get(quote["symbol"], Decimal("0")) + capacity
         mids = {
             symbol: sum(values) / Decimal(str(len(values)))
             for symbol, values in by_symbol.items()
@@ -1650,9 +1657,15 @@ class BotRuntime:
         }
         if not mids:
             return
-        snapshot = {"timestamp": datetime.now(timezone.utc), "mids": mids}
+        snapshot = {"timestamp": datetime.now(timezone.utc), "mids": mids, "liquidity_quote": liquidity_by_symbol}
         self.relative_history.append(to_jsonable(snapshot))
         self.relative_rankings = self._build_relative_rankings()
+        feature_item = {
+            "timestamp": datetime.now(timezone.utc),
+            "features": self.relative_rankings.get("features", []),
+        }
+        self.relative_feature_history.append(to_jsonable(feature_item))
+        append_jsonl(RELATIVE_FEATURE_LOG_PATH, feature_item)
 
     def _relative_returns(self, lookback_minutes: int = 60) -> list[dict[str, Any]]:
         if len(self.relative_history) < 2:
@@ -1696,29 +1709,149 @@ class BotRuntime:
         average = sum(returns) / Decimal(str(len(returns)))
         return max(average, Decimal("0.01"))
 
+    def _relative_series(self, symbol: str, limit: int = 120) -> list[Decimal]:
+        rows = [item for item in list(self.relative_history)[-limit:] if symbol in item.get("mids", {})]
+        return [Decimal(str(item["mids"][symbol])) for item in rows]
+
+    def _ema(self, values: list[Decimal], period: int) -> Decimal | None:
+        if len(values) < period:
+            return None
+        multiplier = Decimal("2") / Decimal(str(period + 1))
+        ema = sum(values[:period]) / Decimal(str(period))
+        for value in values[period:]:
+            ema = (value - ema) * multiplier + ema
+        return ema
+
+    def _rsi(self, values: list[Decimal], period: int = 14) -> Decimal | None:
+        if len(values) <= period:
+            return None
+        gains: list[Decimal] = []
+        losses: list[Decimal] = []
+        for previous, current in zip(values[-(period + 1):-1], values[-period:]):
+            change = current - previous
+            if change >= 0:
+                gains.append(change)
+                losses.append(Decimal("0"))
+            else:
+                gains.append(Decimal("0"))
+                losses.append(abs(change))
+        average_gain = sum(gains) / Decimal(str(period))
+        average_loss = sum(losses) / Decimal(str(period))
+        if average_loss == 0:
+            return Decimal("100")
+        rs = average_gain / average_loss
+        return Decimal("100") - (Decimal("100") / (Decimal("1") + rs))
+
+    def _atr_pct(self, values: list[Decimal], period: int = 14) -> Decimal | None:
+        if len(values) <= period:
+            return None
+        ranges = []
+        for previous, current in zip(values[-(period + 1):-1], values[-period:]):
+            if previous > 0:
+                ranges.append(abs((current - previous) / previous) * Decimal("100"))
+        if not ranges:
+            return None
+        return sum(ranges) / Decimal(str(len(ranges)))
+
+    def _relative_return_from_jst_9(self, symbol: str) -> Decimal | None:
+        if len(self.relative_history) < 2:
+            return None
+        latest = self.relative_history[-1]
+        latest_time = datetime.fromisoformat(latest["timestamp"])
+        jst = timezone(timedelta(hours=9))
+        latest_jst = latest_time.astimezone(jst)
+        start_jst = latest_jst.replace(hour=9, minute=0, second=0, microsecond=0)
+        if latest_jst < start_jst:
+            start_jst -= timedelta(days=1)
+        base = None
+        for item in reversed(self.relative_history):
+            item_time = datetime.fromisoformat(item["timestamp"]).astimezone(jst)
+            if item_time <= start_jst and symbol in item.get("mids", {}):
+                base = item
+                break
+        if base is None:
+            base = next((item for item in self.relative_history if symbol in item.get("mids", {})), None)
+        if base is None or symbol not in latest.get("mids", {}):
+            return None
+        old = Decimal(str(base["mids"][symbol]))
+        new = Decimal(str(latest["mids"][symbol]))
+        if old <= 0:
+            return None
+        return ((new - old) / old) * Decimal("100")
+
+    def _score_relative_features(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not rows:
+            return []
+        max_liquidity = max(Decimal(str(row.get("liquidity_quote") or 0)) for row in rows) or Decimal("1")
+        scored = []
+        for row in rows:
+            ret_1h = Decimal(str(row.get("return_1h_pct") or 0))
+            ret_4h = Decimal(str(row.get("return_4h_pct") or 0))
+            ret_day = Decimal(str(row.get("return_since_9jst_pct") or 0))
+            ema_trend = Decimal(str(row.get("ema_trend_pct") or 0))
+            rsi = Decimal(str(row.get("rsi") or 50))
+            atr = Decimal(str(row.get("atr_pct") or 0))
+            liquidity = Decimal(str(row.get("liquidity_quote") or 0))
+            liquidity_score = min(Decimal("0.3"), (liquidity / max_liquidity) * Decimal("0.3"))
+            thin_penalty = Decimal("2.0") if liquidity < Decimal(os.getenv("RELATIVE_MIN_LIQUIDITY_QUOTE", "10000")) else Decimal("0")
+            rsi_score = (rsi - Decimal("50")) / Decimal("5")
+            atr_penalty = min(Decimal("8"), atr * Decimal("1.5"))
+            score = (
+                ret_1h * Decimal("3.0")
+                + ret_4h * Decimal("1.5")
+                + ret_day * Decimal("1.0")
+                + ema_trend * Decimal("2.0")
+                + rsi_score
+                + liquidity_score
+                - atr_penalty
+                - thin_penalty
+            )
+            row["relative_score"] = score
+            row["score_note"] = "1h/4h/9時から/EMA/RSI/ATR/板厚"
+            scored.append(row)
+        return sorted(scored, key=lambda item: Decimal(str(item["relative_score"])), reverse=True)
+
     def _build_relative_rankings(self) -> dict[str, Any]:
         rows_1h = self._relative_returns(60)
         rows_4h = self._relative_returns(240)
+        latest = self.relative_history[-1] if self.relative_history else {}
         row4_by_symbol = {row["symbol"]: row["return_pct"] for row in rows_4h}
         combined = []
         for row in rows_1h:
+            symbol = row["symbol"]
+            series = self._relative_series(symbol)
+            ema_fast = self._ema(series, 9)
+            ema_slow = self._ema(series, 21)
+            latest_price = series[-1] if series else Decimal("0")
+            ema_trend = Decimal("0")
+            if ema_fast is not None and ema_slow is not None and ema_slow > 0:
+                ema_trend = ((ema_fast - ema_slow) / ema_slow) * Decimal("100")
             combined.append(
                 {
-                    "symbol": row["symbol"],
+                    "symbol": symbol,
                     "return_1h_pct": row["return_pct"],
-                    "return_4h_pct": row4_by_symbol.get(row["symbol"], row["return_pct"]),
+                    "return_4h_pct": row4_by_symbol.get(symbol, row["return_pct"]),
+                    "return_since_9jst_pct": self._relative_return_from_jst_9(symbol),
+                    "ema_fast": ema_fast,
+                    "ema_slow": ema_slow,
+                    "ema_trend_pct": ema_trend,
+                    "rsi": self._rsi(series),
+                    "atr_pct": self._atr_pct(series),
+                    "vwap": latest_price,
+                    "liquidity_quote": (latest.get("liquidity_quote") or {}).get(symbol, 0),
+                    "open_interest": None,
+                    "funding_rate": None,
+                    "liquidation": None,
+                    "data_status": "live mid/orderbook; OI/funding/liquidation pending",
                 }
             )
-        combined.sort(
-            key=lambda item: (Decimal(str(item["return_1h_pct"])) * Decimal("0.65"))
-            + (Decimal(str(item["return_4h_pct"])) * Decimal("0.35")),
-            reverse=True,
-        )
+        combined = self._score_relative_features(combined)
         return to_jsonable(
             {
                 "updated_at": datetime.now(timezone.utc),
                 "strong": combined[:12],
                 "weak": list(reversed(combined[-12:])),
+                "features": combined,
             }
         )
 
@@ -2136,6 +2269,7 @@ class BotRuntime:
             "futures_boost_symbols": sorted(self.futures_boost_symbols.keys()),
             "futures_movement_symbols": to_jsonable(self.futures_movement_symbols),
             "relative_rankings": self.relative_rankings,
+            "relative_feature_history": list(self.relative_feature_history),
             "relative_positions": to_jsonable(list(self.relative_positions.values())),
             "relative_closed_trades": list(self.relative_closed_trades),
             "relative_pnl": to_jsonable(
@@ -2187,6 +2321,7 @@ async def get_history(limit: int = 200):
         "spread_history": list(reversed(read_tail_jsonl(SPREAD_LOG_PATH, limit))),
         "futures_spread_history": list(reversed(read_tail_jsonl(FUTURES_SPREAD_LOG_PATH, limit))),
         "futures_paper_demo": list(reversed(read_tail_jsonl(FUTURES_PAPER_DEMO_LOG_PATH, limit))),
+        "relative_features": list(reversed(read_tail_jsonl(RELATIVE_FEATURE_LOG_PATH, limit))),
         "futures_event_report": futures_event_report(limit=limit),
         "files": {
             "app_log": str(APP_LOG_PATH),
@@ -2194,6 +2329,7 @@ async def get_history(limit: int = 200):
             "spread_history": str(SPREAD_LOG_PATH),
             "futures_spread_history": str(FUTURES_SPREAD_LOG_PATH),
             "futures_paper_demo": str(FUTURES_PAPER_DEMO_LOG_PATH),
+            "relative_features": str(RELATIVE_FEATURE_LOG_PATH),
             "historical_candles": str(HISTORICAL_CANDLE_LOG_PATH),
         },
     }
