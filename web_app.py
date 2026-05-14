@@ -526,6 +526,7 @@ class BotRuntime:
         self.futures_base_symbols: list[str] = []
         self.futures_active_symbols: list[str] = []
         self.futures_boost_symbols: dict[str, datetime] = {}
+        self.futures_movement_symbols: dict[str, Decimal] = {}
         self.balances: list[dict[str, Any]] = []
         self.exchange_handles: dict[str, Any] = {}
         self.preflight_results: list[dict[str, Any]] = []
@@ -650,6 +651,7 @@ class BotRuntime:
 
                 if latest.get("points"):
                     self._update_futures_boost_symbols(latest["points"])
+                    self._update_futures_movement_boost_symbols(config.symbols)
                     best = latest["points"][0]
                     self.log(
                         "futures",
@@ -699,6 +701,34 @@ class BotRuntime:
             if net_value >= net_threshold or gross >= gross_threshold:
                 self.futures_boost_symbols[symbol] = expires_at
 
+    def _update_futures_movement_boost_symbols(self, symbols: list[str]) -> None:
+        if len(self.relative_history) < 2:
+            return
+        one_minute_threshold = Decimal(os.getenv("FUTURES_MOVEMENT_1M_PCT", "1.0"))
+        five_minute_threshold = Decimal(os.getenv("FUTURES_MOVEMENT_5M_PCT", "2.0"))
+        ttl_seconds = int(os.getenv("FUTURES_BOOST_TTL_SECONDS", "180"))
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=ttl_seconds)
+        movement_scores: dict[str, Decimal] = {}
+        rows_1m = self._relative_returns(1)
+        rows_5m = self._relative_returns(5)
+        for row in rows_1m:
+            symbol = str(row.get("symbol", "")).upper()
+            if symbol in symbols:
+                movement_scores[symbol] = max(movement_scores.get(symbol, Decimal("0")), abs(Decimal(str(row.get("return_pct") or 0))))
+        for row in rows_5m:
+            symbol = str(row.get("symbol", "")).upper()
+            if symbol in symbols:
+                movement_scores[symbol] = max(
+                    movement_scores.get(symbol, Decimal("0")),
+                    abs(Decimal(str(row.get("return_pct") or 0))) * Decimal("0.6"),
+                )
+        self.futures_movement_symbols = dict(sorted(movement_scores.items(), key=lambda item: item[1], reverse=True)[:12])
+        for symbol, score in movement_scores.items():
+            one_minute = next((abs(Decimal(str(row.get("return_pct") or 0))) for row in rows_1m if row.get("symbol") == symbol), Decimal("0"))
+            five_minute = next((abs(Decimal(str(row.get("return_pct") or 0))) for row in rows_5m if row.get("symbol") == symbol), Decimal("0"))
+            if one_minute >= one_minute_threshold or five_minute >= five_minute_threshold:
+                self.futures_boost_symbols[symbol] = expires_at
+
     def _select_hot_futures_symbols(self, symbols: list[str]) -> list[str]:
         if not symbols:
             return []
@@ -714,6 +744,7 @@ class BotRuntime:
 
         forced = {position.get("symbol") for position in self.futures_positions.values() if position.get("symbol")}
         forced.update(self.futures_boost_symbols.keys())
+        forced.update(self.futures_movement_symbols.keys())
         for position in self.relative_positions.values():
             if position.get("long_symbol"):
                 forced.add(position["long_symbol"])
@@ -2042,6 +2073,7 @@ class BotRuntime:
             "futures_base_symbols": self.futures_base_symbols,
             "futures_active_symbols": self.futures_active_symbols,
             "futures_boost_symbols": sorted(self.futures_boost_symbols.keys()),
+            "futures_movement_symbols": to_jsonable(self.futures_movement_symbols),
             "relative_rankings": self.relative_rankings,
             "relative_positions": to_jsonable(list(self.relative_positions.values())),
             "relative_closed_trades": list(self.relative_closed_trades),

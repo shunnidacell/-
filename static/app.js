@@ -272,6 +272,7 @@ function renderActiveSymbols(state, perf) {
   const baseCount = state.futures_base_symbols?.length || perf.base_symbol_count || symbols.length;
   const activeCount = perf.active_symbol_count || symbols.length;
   const boostSymbols = new Set(state.futures_boost_symbols || []);
+  const movementSymbols = state.futures_movement_symbols || {};
   if (activeSymbolsMetaEl) {
     activeSymbolsMetaEl.textContent = `${activeCount}銘柄 / 候補${baseCount}銘柄`;
   }
@@ -284,7 +285,11 @@ function renderActiveSymbols(state, perf) {
   if (activeSymbolsMetaEl) {
     activeSymbolsMetaEl.textContent = `${activeCount}銘柄 / 候補${baseCount}銘柄 / 高速${boostSymbols.size}銘柄`;
   }
-  activeSymbolsEl.innerHTML = symbols.map((symbol) => `<span class="symbol-chip ${boostSymbols.has(symbol) ? "boost" : ""}">${escapeHtml(symbol)}</span>`).join("");
+  activeSymbolsEl.innerHTML = symbols.map((symbol) => {
+    const movement = Number(movementSymbols[symbol] || 0);
+    const label = movement > 0 ? `${symbol} ${numberText(movement, 2)}%` : symbol;
+    return `<span class="symbol-chip ${boostSymbols.has(symbol) ? "boost" : ""}">${escapeHtml(label)}</span>`;
+  }).join("");
 }
 
 function optionHtml(symbol, label = symbol) {
