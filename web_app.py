@@ -1779,7 +1779,7 @@ class BotRuntime:
             return None
         return ((new - old) / old) * Decimal("100")
 
-    def _liquidity_growth_pct(self, symbol: str, lookback_points: int = 20) -> Decimal | None:
+    def _liquidity_growth_pct(self, symbol: str, lookback_points: int = 60) -> Decimal | None:
         points = [
             item for item in list(self.relative_history)[-lookback_points:]
             if symbol in item.get("liquidity_quote", {})
@@ -1791,6 +1791,15 @@ class BotRuntime:
         if old <= 0:
             return None
         return ((new - old) / old) * Decimal("100")
+
+    def _smoothed_relative_score(self, symbol: str, current_score: Decimal, lookback_items: int = 12) -> Decimal:
+        scores = [current_score]
+        for item in list(self.relative_feature_history)[-lookback_items:]:
+            for row in item.get("features", []):
+                if row.get("symbol") == symbol and row.get("relative_score") is not None:
+                    scores.append(Decimal(str(row["relative_score"])))
+                    break
+        return sum(scores) / Decimal(str(len(scores)))
 
     def _score_relative_features(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not rows:
@@ -1809,7 +1818,7 @@ class BotRuntime:
             rsi_score = (rsi - Decimal("50")) / Decimal("5")
             atr_penalty = min(Decimal("8"), atr * Decimal("1.5"))
             score = (
-                volume_growth_capped * Decimal("0.12")
+                volume_growth_capped * Decimal("0.03")
                 + ema_trend * Decimal("2.0")
                 + rsi_score
                 + liquidity_score
@@ -1817,6 +1826,8 @@ class BotRuntime:
                 - thin_penalty
             )
             row["relative_score"] = score
+            row["raw_relative_score"] = score
+            row["relative_score"] = self._smoothed_relative_score(str(row.get("symbol", "")), score)
             row["volume_growth_score_pct"] = volume_growth_capped
             row["score_note"] = "出来高増加/EMA/RSI/ATR/板厚"
             scored.append(row)

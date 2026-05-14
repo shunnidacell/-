@@ -215,7 +215,7 @@ function renderRelativeList(target, rows, emptyText) {
     <article class="ranking-row">
       <div>
         <strong>${escapeHtml(item.symbol)}</strong>
-        <span>Score ${numberText(item.relative_score, 2)} / 出来高増 ${numberText(item.volume_growth_pct, 2)}% → ${numberText(item.volume_growth_score_pct, 2)}%</span>
+        <span>Score ${numberText(item.relative_score, 2)} / raw ${numberText(item.raw_relative_score, 2)} / 出来高増 ${numberText(item.volume_growth_pct, 2)}% → ${numberText(item.volume_growth_score_pct, 2)}%</span>
         <span>1h ${numberText(item.return_1h_pct)}% / 4h ${numberText(item.return_4h_pct)}%</span>
         <span>9時 ${numberText(item.return_since_9jst_pct)}% / RSI ${numberText(item.rsi, 1)} / ATR ${numberText(item.atr_pct, 3)}% / EMA ${numberText(item.ema_trend_pct, 3)}%</span>
       </div>
