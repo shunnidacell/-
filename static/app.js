@@ -232,7 +232,8 @@ function renderRelativePositions(positions) {
           <span>Short ${escapeHtml((position.short_symbols || []).join(", "))}</span>
         </div>
         <div>
-          <span>Relative ${numberText(position.last_relative_pct)}%</span>
+          <span>Relative ${numberText(position.last_relative_pct)}% ${position.relative_basis === "vol_adjusted" ? "vol調整" : ""}</span>
+          <span>Long ${numberText(position.long_return_pct)}% / Short ${numberText(position.short_return_pct)}%</span>
           <span>${moneyText(position.quote_amount)} USDT / ${escapeHtml(position.mode || "manual")}</span>
         </div>
         <div class="rank-net ${pnl >= 0 ? "positive" : "negative"}">${pnl >= 0 ? "+" : ""}${moneyText(pnl)}</div>

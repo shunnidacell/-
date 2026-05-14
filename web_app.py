@@ -1420,6 +1420,22 @@ class BotRuntime:
             rows.append({"symbol": symbol, "return_pct": ((new - old) / old) * Decimal("100")})
         return sorted(rows, key=lambda item: item["return_pct"], reverse=True)
 
+    def _relative_volatility_pct(self, symbol: str, lookback_points: int = 80) -> Decimal:
+        points = [item for item in list(self.relative_history)[-lookback_points:] if symbol in item.get("mids", {})]
+        if len(points) < 3:
+            return Decimal("1")
+        returns = []
+        previous = Decimal(str(points[0]["mids"][symbol]))
+        for item in points[1:]:
+            current = Decimal(str(item["mids"][symbol]))
+            if previous > 0 and current > 0:
+                returns.append(abs(((current - previous) / previous) * Decimal("100")))
+            previous = current
+        if not returns:
+            return Decimal("1")
+        average = sum(returns) / Decimal(str(len(returns)))
+        return max(average, Decimal("0.01"))
+
     def _build_relative_rankings(self) -> dict[str, Any]:
         rows_1h = self._relative_returns(60)
         rows_4h = self._relative_returns(240)
@@ -1589,6 +1605,20 @@ class BotRuntime:
                 continue
             short_avg = sum(short_returns) / Decimal(str(len(short_returns)))
             relative_pct = long_ret - short_avg
+            if os.getenv("RELATIVE_VOL_ADJUST", "true").strip().lower() in {"1", "true", "yes", "on"}:
+                long_vol = self._relative_volatility_pct(long_symbol)
+                short_vols = [self._relative_volatility_pct(symbol) for symbol in position["entry_short_prices"]]
+                short_vol = sum(short_vols) / Decimal(str(len(short_vols))) if short_vols else Decimal("1")
+                relative_pct = (long_ret / long_vol) - (short_avg / short_vol)
+                position["relative_basis"] = "vol_adjusted"
+                position["long_return_pct"] = long_ret
+                position["short_return_pct"] = short_avg
+                position["long_vol_pct"] = long_vol
+                position["short_vol_pct"] = short_vol
+            else:
+                position["relative_basis"] = "raw"
+                position["long_return_pct"] = long_ret
+                position["short_return_pct"] = short_avg
             amount = Decimal(str(position["quote_amount"]))
             profit = amount * (relative_pct / Decimal("100"))
             position["last_relative_pct"] = relative_pct
