@@ -1692,6 +1692,10 @@ class BotRuntime:
     def state(self) -> dict[str, Any]:
         running = bool(self.task and not self.task.done())
         self._refresh_futures_paper_pnl()
+        futures_start_cash = Decimal(os.getenv("FUTURES_PAPER_START_CASH", "10000"))
+        relative_start_cash = Decimal(os.getenv("RELATIVE_PAPER_START_CASH", "10000"))
+        futures_total = self.futures_realized_profit + self.futures_unrealized_profit
+        relative_total = self.relative_realized_profit + self.relative_unrealized_profit
         return {
             "running": running,
             "settings": self.settings.model_dump(),
@@ -1713,7 +1717,17 @@ class BotRuntime:
                 {
                     "realized": self.futures_realized_profit,
                     "unrealized": self.futures_unrealized_profit,
-                    "total": self.futures_realized_profit + self.futures_unrealized_profit,
+                    "total": futures_total,
+                }
+            ),
+            "futures_paper_account": to_jsonable(
+                {
+                    "starting_cash": futures_start_cash,
+                    "equity": futures_start_cash + futures_total,
+                    "realized": self.futures_realized_profit,
+                    "unrealized": self.futures_unrealized_profit,
+                    "trade_count": len(self.futures_closed_trades),
+                    "open_count": len(self.futures_positions),
                 }
             ),
             "futures_perf": to_jsonable(self.futures_perf),
@@ -1726,7 +1740,17 @@ class BotRuntime:
                 {
                     "realized": self.relative_realized_profit,
                     "unrealized": self.relative_unrealized_profit,
-                    "total": self.relative_realized_profit + self.relative_unrealized_profit,
+                    "total": relative_total,
+                }
+            ),
+            "relative_paper_account": to_jsonable(
+                {
+                    "starting_cash": relative_start_cash,
+                    "equity": relative_start_cash + relative_total,
+                    "realized": self.relative_realized_profit,
+                    "unrealized": self.relative_unrealized_profit,
+                    "trade_count": len(self.relative_closed_trades),
+                    "open_count": len(self.relative_positions),
                 }
             ),
             "balances": self.balances,

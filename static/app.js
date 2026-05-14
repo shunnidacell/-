@@ -12,6 +12,8 @@ const marketCountEl = document.querySelector("#market-count");
 const pairCountEl = document.querySelector("#opportunity-count");
 const bestNetEl = document.querySelector("#best-profit");
 const paperProfitEl = document.querySelector("#demo-profit");
+const futuresDemoBalanceEl = document.querySelector("#futures-demo-balance");
+const relativeDemoBalanceEl = document.querySelector("#relative-demo-balance");
 const demoCashEl = document.querySelector("#demo-cash");
 const lastTickEl = document.querySelector("#last-tick");
 const runNoticeEl = document.querySelector("#run-notice");
@@ -281,6 +283,8 @@ function renderState(state) {
   const points = latestFutures?.points || [];
   const portfolio = state.portfolio || {};
   const futuresPnl = state.futures_paper_pnl || {};
+  const futuresAccount = state.futures_paper_account || {};
+  const relativeAccount = state.relative_paper_account || {};
   const perf = state.futures_perf || {};
 
   statusEl.textContent = state.running ? "実行中" : "停止中";
@@ -297,6 +301,18 @@ function renderState(state) {
   const totalPnl = Number(futuresPnl.total ?? portfolio.realized_profit ?? 0);
   paperProfitEl.textContent = moneyText(totalPnl);
   paperProfitEl.classList.toggle("positive", totalPnl >= 0);
+  if (futuresDemoBalanceEl) {
+    const equity = Number(futuresAccount.equity ?? 10000);
+    futuresDemoBalanceEl.textContent = `${moneyText(equity)} USDT`;
+    futuresDemoBalanceEl.classList.toggle("positive", Number(futuresAccount.total ?? futuresPnl.total ?? 0) >= 0);
+  }
+  if (relativeDemoBalanceEl) {
+    const equity = Number(relativeAccount.equity ?? 10000);
+    const total = Number(state.relative_pnl?.total ?? 0);
+    relativeDemoBalanceEl.textContent = `${moneyText(equity)} USDT`;
+    relativeDemoBalanceEl.classList.toggle("positive", total >= 0);
+    relativeDemoBalanceEl.classList.toggle("negative", total < 0);
+  }
   demoCashEl.textContent = "Paper";
   lastTickEl.textContent = state.last_tick ? new Date(state.last_tick).toLocaleString() : "未取得";
 
