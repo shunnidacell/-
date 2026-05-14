@@ -42,6 +42,7 @@ SPREAD_LOG_PATH = LOG_DIR / "spread_history.jsonl"
 FUTURES_SPREAD_LOG_PATH = LOG_DIR / "futures_spread_history.jsonl"
 FUTURES_PAPER_DEMO_LOG_PATH = LOG_DIR / "futures_paper_demo.jsonl"
 RELATIVE_FEATURE_LOG_PATH = LOG_DIR / "relative_features.jsonl"
+RELATIVE_MARKET_DATA_LOG_PATH = LOG_DIR / "relative_market_data.jsonl"
 HISTORICAL_CANDLE_LOG_PATH = LOG_DIR / "historical_candles.jsonl"
 LIVE_CONFIRM_TEXT = "I_UNDERSTAND_REAL_ORDERS"
 
@@ -539,6 +540,8 @@ class BotRuntime:
         self.futures_realized_profit = Decimal("0")
         self.relative_history: deque[dict[str, Any]] = deque(maxlen=12000)
         self.relative_feature_history: deque[dict[str, Any]] = deque(maxlen=12000)
+        self.relative_market_history: deque[dict[str, Any]] = deque(maxlen=12000)
+        self.last_relative_market_data_at: datetime | None = None
         self.relative_rankings: dict[str, Any] = {}
         self.relative_positions: dict[str, dict[str, Any]] = {}
         self.relative_closed_trades: deque[dict[str, Any]] = deque(maxlen=200)
@@ -1099,6 +1102,7 @@ class BotRuntime:
         self.futures_spread_history.append(item)
         append_jsonl(FUTURES_SPREAD_LOG_PATH, item)
         self._record_relative_snapshot(quotes)
+        await self._record_relative_market_data(exchanges, config.symbols, quotes)
         self._refresh_relative_pnl()
         elapsed = (datetime.now(timezone.utc) - started).total_seconds()
         self.futures_perf = {
@@ -1393,6 +1397,145 @@ class BotRuntime:
             "close": values[4],
             "volume": values[5] if len(values) > 5 else None,
         }
+
+    async def _record_relative_market_data(self, exchanges: list[str], symbols: list[str], quotes: list[dict[str, Any]]) -> None:
+        interval = float(os.getenv("RELATIVE_MARKET_DATA_SECONDS", "60"))
+        now = datetime.now(timezone.utc)
+        if self.last_relative_market_data_at and (now - self.last_relative_market_data_at).total_seconds() < interval:
+            return
+        self.last_relative_market_data_at = now
+        quote_map = {(quote.get("exchange_id"), quote.get("symbol")): quote for quote in quotes if quote.get("status") == "ok"}
+        tasks = [
+            self._fetch_relative_market_row(exchange_id, symbol, quote_map.get((exchange_id, symbol)))
+            for exchange_id in exchanges
+            for symbol in symbols
+        ]
+        rows = [row for row in await asyncio.gather(*tasks, return_exceptions=True) if isinstance(row, dict)]
+        item = {"timestamp": now, "rows": rows}
+        self.relative_market_history.append(to_jsonable(item))
+        append_jsonl(RELATIVE_MARKET_DATA_LOG_PATH, item)
+
+    async def _fetch_relative_market_row(self, exchange_id: str, symbol: str, quote: dict[str, Any] | None) -> dict[str, Any]:
+        row: dict[str, Any] = {
+            "timestamp": datetime.now(timezone.utc),
+            "exchange_id": exchange_id,
+            "symbol": symbol,
+            "futures_symbol": self._futures_symbol(exchange_id, symbol),
+            "status": "ok",
+            "ohlcv_timeframe": "1m",
+            "open_interest": None,
+            "funding_rate": None,
+            "liquidation": None,
+        }
+        if quote:
+            bids = quote.get("bids") or []
+            asks = quote.get("asks") or []
+            row.update(
+                {
+                    "bid": quote.get("bid"),
+                    "ask": quote.get("ask"),
+                    "mid": quote.get("mid"),
+                    "spread_pct": ((Decimal(str(quote["ask"])) - Decimal(str(quote["bid"]))) / Decimal(str(quote["mid"])) * Decimal("100"))
+                    if quote.get("bid") and quote.get("ask") and quote.get("mid")
+                    else None,
+                    "bid_depth_quote": quote.get("bid_capacity_quote"),
+                    "ask_depth_quote": quote.get("ask_capacity_quote"),
+                    "orderbook_bids": bids[: int(os.getenv("RELATIVE_ORDERBOOK_LOG_LEVELS", "5"))],
+                    "orderbook_asks": asks[: int(os.getenv("RELATIVE_ORDERBOOK_LOG_LEVELS", "5"))],
+                }
+            )
+        try:
+            end_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+            candles = await self._fetch_futures_candles(exchange_id, symbol, "1m", end_ms - 10 * 60_000, end_ms, 10)
+            if candles:
+                candle = candles[-1]
+                row.update(
+                    {
+                        "ohlcv": candle,
+                        "ohlcv_close": candle.get("close"),
+                        "ohlcv_volume": candle.get("volume"),
+                    }
+                )
+        except Exception as exc:
+            row["ohlcv_error"] = f"{type(exc).__name__}: {exc}"
+        try:
+            metrics = await self._fetch_futures_market_metrics(exchange_id, symbol)
+            row.update(metrics)
+        except Exception as exc:
+            row["metrics_error"] = f"{type(exc).__name__}: {exc}"
+        return row
+
+    async def _fetch_futures_market_metrics(self, exchange_id: str, symbol: str) -> dict[str, Any]:
+        compact = symbol.replace("/", "").replace("-", "").upper()
+        headers = {"User-Agent": "arb-bot/1.0"}
+        connector = aiohttp.TCPConnector(resolver=aiohttp.ThreadedResolver())
+        async with aiohttp.ClientSession(headers=headers, connector=connector) as session:
+            if exchange_id == "binance":
+                metrics: dict[str, Any] = {}
+                async with session.get("https://fapi.binance.com/fapi/v1/openInterest", params={"symbol": compact}, timeout=10) as response:
+                    response.raise_for_status()
+                    oi = await response.json()
+                metrics["open_interest"] = oi.get("openInterest")
+                async with session.get("https://fapi.binance.com/fapi/v1/premiumIndex", params={"symbol": compact}, timeout=10) as response:
+                    response.raise_for_status()
+                    funding = await response.json()
+                metrics["funding_rate"] = Decimal(str(funding.get("lastFundingRate") or 0)) * Decimal("100")
+                return metrics
+            if exchange_id == "okx":
+                inst_id = symbol.replace("/", "-").upper() + "-SWAP"
+                metrics = {}
+                async with session.get("https://www.okx.com/api/v5/public/open-interest", params={"instType": "SWAP", "instId": inst_id}, timeout=10) as response:
+                    response.raise_for_status()
+                    oi = await response.json()
+                oi_row = (oi.get("data") or [{}])[0]
+                metrics["open_interest"] = oi_row.get("oi")
+                async with session.get("https://www.okx.com/api/v5/public/funding-rate", params={"instId": inst_id}, timeout=10) as response:
+                    response.raise_for_status()
+                    funding = await response.json()
+                funding_row = (funding.get("data") or [{}])[0]
+                metrics["funding_rate"] = Decimal(str(funding_row.get("fundingRate") or 0)) * Decimal("100")
+                return metrics
+            if exchange_id == "hyperliquid":
+                coin = symbol.split("/")[0].upper()
+                async with session.post("https://api.hyperliquid.xyz/info", json={"type": "metaAndAssetCtxs"}, timeout=10) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+                universe = ((data or [None, None])[0] or {}).get("universe") or []
+                ctxs = (data or [None, []])[1] or []
+                for index, market in enumerate(universe):
+                    if market.get("name") == coin and index < len(ctxs):
+                        ctx = ctxs[index]
+                        return {
+                            "open_interest": ctx.get("openInterest"),
+                            "funding_rate": Decimal(str(ctx.get("funding") or 0)) * Decimal("100"),
+                        }
+                return {}
+            if exchange_id == "bitget":
+                metrics = {}
+                async with session.get(
+                    "https://api.bitget.com/api/v2/mix/market/open-interest",
+                    params={"symbol": compact, "productType": "USDT-FUTURES"},
+                    timeout=10,
+                ) as response:
+                    response.raise_for_status()
+                    oi = await response.json()
+                oi_data = oi.get("data")
+                if isinstance(oi_data, dict):
+                    metrics["open_interest"] = oi_data.get("openInterestList", [{}])[0].get("size") if isinstance(oi_data.get("openInterestList"), list) else oi_data.get("openInterest")
+                async with session.get(
+                    "https://api.bitget.com/api/v2/mix/market/current-fund-rate",
+                    params={"symbol": compact, "productType": "USDT-FUTURES"},
+                    timeout=10,
+                ) as response:
+                    response.raise_for_status()
+                    funding = await response.json()
+                funding_data = funding.get("data")
+                if isinstance(funding_data, list):
+                    funding_data = funding_data[0] if funding_data else {}
+                if isinstance(funding_data, dict):
+                    metrics["funding_rate"] = Decimal(str(funding_data.get("fundingRate") or 0)) * Decimal("100")
+                return metrics
+        return {}
 
     def set_demo_price_adjustment(self, request: DemoPriceAdjustment) -> None:
         key = (request.exchange_id.strip().lower(), request.symbol.strip().upper())
@@ -1911,6 +2054,50 @@ class BotRuntime:
             return default
         return Decimal(str(value))
 
+    def _latest_market_average(self, symbol: str, key: str) -> Decimal | None:
+        for item in reversed(self.relative_market_history):
+            values = []
+            for row in item.get("rows", []):
+                if row.get("symbol") != symbol or row.get(key) is None:
+                    continue
+                try:
+                    values.append(Decimal(str(row[key])))
+                except Exception:
+                    continue
+            if values:
+                return sum(values) / Decimal(str(len(values)))
+        return None
+
+    def _market_metric_change_minutes(self, symbol: str, key: str, lookback_minutes: int) -> Decimal | None:
+        if len(self.relative_market_history) < 2:
+            return None
+        latest = self.relative_market_history[-1]
+        latest_time = datetime.fromisoformat(latest["timestamp"]) if isinstance(latest["timestamp"], str) else latest["timestamp"]
+        target_age = lookback_minutes * 60
+        base = self.relative_market_history[0]
+        for item in reversed(self.relative_market_history):
+            item_time = datetime.fromisoformat(item["timestamp"]) if isinstance(item["timestamp"], str) else item["timestamp"]
+            if (latest_time - item_time).total_seconds() >= target_age:
+                base = item
+                break
+
+        def average(rowset: dict[str, Any]) -> Decimal | None:
+            values = []
+            for row in rowset.get("rows", []):
+                if row.get("symbol") != symbol or row.get(key) is None:
+                    continue
+                try:
+                    values.append(Decimal(str(row[key])))
+                except Exception:
+                    continue
+            return sum(values) / Decimal(str(len(values))) if values else None
+
+        old = average(base)
+        new = average(latest)
+        if old is None or new is None or old <= 0:
+            return None
+        return ((new - old) / old) * Decimal("100")
+
     def _vwap(self, symbol: str, lookback_points: int = 240) -> Decimal | None:
         rows = [item for item in list(self.relative_history)[-lookback_points:] if symbol in item.get("mids", {})]
         if not rows:
@@ -2152,6 +2339,12 @@ class BotRuntime:
             volume_15m = Decimal(str(row.get("volume_change_15m_pct") or 0))
             volume_1h = Decimal(str(row.get("volume_change_1h_pct") or 0))
             volume_4h = Decimal(str(row.get("volume_change_4h_pct") or 0))
+            real_volume_15m = row.get("real_volume_change_15m_pct")
+            real_volume_1h = row.get("real_volume_change_1h_pct")
+            real_volume_4h = row.get("real_volume_change_4h_pct")
+            score_volume_15m = Decimal(str(real_volume_15m if real_volume_15m is not None else volume_15m))
+            score_volume_1h = Decimal(str(real_volume_1h if real_volume_1h is not None else volume_1h))
+            score_volume_4h = Decimal(str(real_volume_4h if real_volume_4h is not None else volume_4h))
             bid_depth_1h = Decimal(str(row.get("bid_depth_change_1h_pct") or 0))
             ask_depth_1h = Decimal(str(row.get("ask_depth_change_1h_pct") or 0))
             bid_depth_4h = Decimal(str(row.get("bid_depth_change_4h_pct") or 0))
@@ -2192,9 +2385,9 @@ class BotRuntime:
                 "15m_return": cap(return_15m, Decimal("5")) * Decimal("0.5"),
                 "1h_return_rank": cap(return_1h_score, Decimal("1")) * Decimal("0.75"),
                 "4h_return_rank": cap(return_4h_score, Decimal("1")) * Decimal("1"),
-                "15m_volume": cap(volume_15m / Decimal("10"), Decimal("4")) * Decimal("0.5"),
-                "1h_volume": cap(volume_1h / Decimal("10"), Decimal("5")) * Decimal("0.8"),
-                "4h_volume": cap(volume_4h / Decimal("10"), Decimal("5")) * Decimal("0.6"),
+                "15m_volume": cap(score_volume_15m / Decimal("10"), Decimal("4")) * Decimal("0.5"),
+                "1h_volume": cap(score_volume_1h / Decimal("10"), Decimal("5")) * Decimal("0.8"),
+                "4h_volume": cap(score_volume_4h / Decimal("10"), Decimal("5")) * Decimal("0.6"),
                 "15m_oi": cap(oi_15m / Decimal("10"), Decimal("5")) * Decimal("1"),
                 "1h_oi": cap(oi_1h / Decimal("10"), Decimal("5")) * Decimal("2"),
                 "4h_oi": cap(oi_4h / Decimal("10"), Decimal("5")) * Decimal("2"),
@@ -2313,7 +2506,10 @@ class BotRuntime:
                     "volume_change_15m_pct": self._liquidity_growth_minutes(symbol, 15),
                     "volume_change_1h_pct": self._liquidity_growth_minutes(symbol, 60),
                     "volume_change_4h_pct": self._liquidity_growth_minutes(symbol, 240),
-                    "volume_source": "orderbook_liquidity_proxy",
+                    "real_volume_change_15m_pct": self._market_metric_change_minutes(symbol, "ohlcv_volume", 15),
+                    "real_volume_change_1h_pct": self._market_metric_change_minutes(symbol, "ohlcv_volume", 60),
+                    "real_volume_change_4h_pct": self._market_metric_change_minutes(symbol, "ohlcv_volume", 240),
+                    "volume_source": "ohlcv_volume_when_available_else_orderbook_liquidity_proxy",
                     "bid_liquidity_quote": (latest.get("bid_liquidity_quote") or {}).get(symbol, 0),
                     "ask_liquidity_quote": (latest.get("ask_liquidity_quote") or {}).get(symbol, 0),
                     "bid_depth_change_1h_pct": self._depth_growth_minutes(symbol, "bid_liquidity_quote", 60),
@@ -2327,14 +2523,14 @@ class BotRuntime:
                     "price_candle_timeframe": candle_chart["timeframe"],
                     "price_candle_days": candle_chart["days"],
                     "price_candle_exchange": candle_chart["exchange"],
-                    "open_interest": None,
-                    "oi_change_15m_pct": None,
-                    "oi_change_1h_pct": None,
-                    "oi_change_4h_pct": None,
-                    "oi_change_24h_pct": None,
-                    "funding_rate": None,
+                    "open_interest": self._latest_market_average(symbol, "open_interest"),
+                    "oi_change_15m_pct": self._market_metric_change_minutes(symbol, "open_interest", 15),
+                    "oi_change_1h_pct": self._market_metric_change_minutes(symbol, "open_interest", 60),
+                    "oi_change_4h_pct": self._market_metric_change_minutes(symbol, "open_interest", 240),
+                    "oi_change_24h_pct": self._market_metric_change_minutes(symbol, "open_interest", 1440),
+                    "funding_rate": self._latest_market_average(symbol, "funding_rate"),
                     "liquidation": None,
-                    "data_status": "live mid/orderbook; OI/funding/liquidation pending",
+                    "data_status": "live mid/orderbook; OHLCV/OI/funding recorded when available; liquidation pending",
                 }
             )
         combined = self._score_relative_features(combined)
@@ -2887,6 +3083,7 @@ async def get_history(limit: int = 200):
         "futures_spread_history": list(reversed(read_tail_jsonl(FUTURES_SPREAD_LOG_PATH, limit))),
         "futures_paper_demo": list(reversed(read_tail_jsonl(FUTURES_PAPER_DEMO_LOG_PATH, limit))),
         "relative_features": list(reversed(read_tail_jsonl(RELATIVE_FEATURE_LOG_PATH, limit))),
+        "relative_market_data": list(reversed(read_tail_jsonl(RELATIVE_MARKET_DATA_LOG_PATH, limit))),
         "futures_event_report": futures_event_report(limit=limit),
         "files": {
             "app_log": str(APP_LOG_PATH),
@@ -2895,6 +3092,7 @@ async def get_history(limit: int = 200):
             "futures_spread_history": str(FUTURES_SPREAD_LOG_PATH),
             "futures_paper_demo": str(FUTURES_PAPER_DEMO_LOG_PATH),
             "relative_features": str(RELATIVE_FEATURE_LOG_PATH),
+            "relative_market_data": str(RELATIVE_MARKET_DATA_LOG_PATH),
             "historical_candles": str(HISTORICAL_CANDLE_LOG_PATH),
         },
     }

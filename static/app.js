@@ -319,6 +319,7 @@ function renderRelativeList(target, rows, emptyText, limit = 6) {
             ${pctBadge("24h", item.return_24h_pct)}
           </div>
           <span>Liq 15m ${numberText(item.volume_change_15m_pct, 1)}% / 1h ${numberText(item.volume_change_1h_pct, 1)}% / 4h ${numberText(item.volume_change_4h_pct, 1)}%</span>
+          <span>RealVol 15m ${numberText(item.real_volume_change_15m_pct, 1)}% / 1h ${numberText(item.real_volume_change_1h_pct, 1)}% / 4h ${numberText(item.real_volume_change_4h_pct, 1)}%</span>
           <span>BidDepth 1h ${numberText(item.bid_depth_change_1h_pct, 1)}% / 4h ${numberText(item.bid_depth_change_4h_pct, 1)}% · AskDepth 1h ${numberText(item.ask_depth_change_1h_pct, 1)}% / 4h ${numberText(item.ask_depth_change_4h_pct, 1)}%</span>
           <span>OI 1h ${numberText(item.oi_change_1h_pct, 1)}% / 4h ${numberText(item.oi_change_4h_pct, 1)}% / Funding ${numberText(item.funding_rate, 4)}%</span>
           <span>ReturnScore 1h ${numberText(item.return_1h_score, 2)} / 4h ${numberText(item.return_4h_score, 2)} / SurgePenalty ${numberText(item.price_surge_penalty, 2)}</span>
