@@ -2153,6 +2153,36 @@ class BotRuntime:
         average = sum(returns) / Decimal(str(len(returns)))
         return max(average, Decimal("0.01"))
 
+    def _relative_sizing_volatility_pct(self, symbol: str) -> Decimal:
+        live_vol = self._relative_volatility_pct(symbol)
+        if live_vol != Decimal("1"):
+            return live_vol
+        candles = self._historical_candles_for_symbol(symbol, max_bars=80).get("candles", [])
+        closes = []
+        for candle in candles:
+            try:
+                close = Decimal(str(candle.get("close")))
+                if close > 0:
+                    closes.append(close)
+            except Exception:
+                continue
+        if len(closes) >= 5:
+            returns = [
+                abs(((current - previous) / previous) * Decimal("100"))
+                for previous, current in zip(closes[-41:-1], closes[-40:])
+                if previous > 0 and current > 0
+            ]
+            if returns:
+                return max(sum(returns) / Decimal(str(len(returns))), Decimal("0.05"))
+        base = symbol.split("/")[0].upper()
+        if base == "BTC":
+            return Decimal(os.getenv("RELATIVE_DEFAULT_BTC_VOL_PCT", "0.35"))
+        if base == "ETH":
+            return Decimal(os.getenv("RELATIVE_DEFAULT_ETH_VOL_PCT", "0.60"))
+        if base in {"SOL", "BNB", "XRP", "DOGE", "HYPE"}:
+            return Decimal(os.getenv("RELATIVE_DEFAULT_MAJOR_ALT_VOL_PCT", "1.00"))
+        return Decimal(os.getenv("RELATIVE_DEFAULT_ALT_VOL_PCT", "1.50"))
+
     def _relative_series(self, symbol: str, limit: int = 120) -> list[Decimal]:
         rows = [item for item in list(self.relative_history)[-limit:] if symbol in item.get("mids", {})]
         return [Decimal(str(item["mids"][symbol])) for item in rows]
@@ -2859,12 +2889,31 @@ class BotRuntime:
         key = f"{long_symbol}|{','.join(short_symbols)}"
         now = datetime.now(timezone.utc)
         quote_amount = Decimal(str(request.quote_amount))
+        long_vol = self._relative_sizing_volatility_pct(long_symbol)
+        short_vols = {symbol: self._relative_sizing_volatility_pct(symbol) for symbol in short_symbols}
+        hedge_mode = os.getenv("RELATIVE_HEDGE_MODE", "volatility_adjusted").strip().lower()
+        long_quote_amount = quote_amount
+        if hedge_mode in {"vol", "volatility", "volatility_adjusted", "risk"}:
+            short_quote_amounts = {
+                symbol: (quote_amount / Decimal(str(len(short_symbols)))) * (long_vol / max(short_vol, Decimal("0.0001")))
+                for symbol, short_vol in short_vols.items()
+            }
+            hedge_basis = "volatility_adjusted_notional"
+        else:
+            short_quote_amounts = {symbol: quote_amount / Decimal(str(len(short_symbols))) for symbol in short_symbols}
+            hedge_basis = "equal_total_notional"
         position = {
             "id": key,
             "mode": request.mode,
             "long_symbol": long_symbol,
             "short_symbols": short_symbols,
             "quote_amount": quote_amount,
+            "long_quote_amount": long_quote_amount,
+            "short_quote_amounts": short_quote_amounts,
+            "short_total_quote_amount": sum(short_quote_amounts.values()),
+            "hedge_basis": hedge_basis,
+            "sizing_long_vol_pct": long_vol,
+            "sizing_short_vols_pct": short_vols,
             "opened_at": now,
             "entry_long_price": Decimal(str(latest_mids[long_symbol])),
             "entry_short_prices": {symbol: Decimal(str(latest_mids[symbol])) for symbol in short_symbols},
@@ -2887,6 +2936,10 @@ class BotRuntime:
             "long_symbol": position["long_symbol"],
             "short_symbols": position["short_symbols"],
             "quote_amount": position["quote_amount"],
+            "long_quote_amount": position.get("long_quote_amount", position["quote_amount"]),
+            "short_quote_amounts": position.get("short_quote_amounts", {}),
+            "short_total_quote_amount": position.get("short_total_quote_amount"),
+            "hedge_basis": position.get("hedge_basis", ""),
             "relative_pct": position.get("last_relative_pct", Decimal("0")),
             "profit_quote": profit,
             "status": status,
@@ -2930,37 +2983,49 @@ class BotRuntime:
             long_now = Decimal(str(latest_mids[long_symbol]))
             long_ret = ((long_now - long_entry) / long_entry) * Decimal("100")
             short_returns = []
+            short_pnl = Decimal("0")
             for symbol, entry_price in position["entry_short_prices"].items():
                 if symbol not in latest_mids:
                     continue
                 entry = Decimal(str(entry_price))
                 now = Decimal(str(latest_mids[symbol]))
-                short_returns.append(((now - entry) / entry) * Decimal("100"))
+                short_ret = ((now - entry) / entry) * Decimal("100")
+                short_returns.append(short_ret)
+                short_amount = Decimal(str((position.get("short_quote_amounts") or {}).get(symbol, Decimal("0"))))
+                short_pnl += short_amount * ((Decimal("0") - short_ret) / Decimal("100"))
             if not short_returns:
                 continue
             short_avg = sum(short_returns) / Decimal(str(len(short_returns)))
-            relative_pct = long_ret - short_avg
+            long_amount = Decimal(str(position.get("long_quote_amount", position["quote_amount"])))
+            long_pnl = long_amount * (long_ret / Decimal("100"))
+            total_capital = long_amount + sum(Decimal(str(value)) for value in (position.get("short_quote_amounts") or {}).values())
+            raw_profit = long_pnl + short_pnl
+            relative_pct = (raw_profit / total_capital) * Decimal("100") if total_capital > 0 else long_ret - short_avg
             if os.getenv("RELATIVE_VOL_ADJUST", "true").strip().lower() in {"1", "true", "yes", "on"}:
                 long_vol = self._relative_volatility_pct(long_symbol)
                 short_vols = [self._relative_volatility_pct(symbol) for symbol in position["entry_short_prices"]]
                 short_vol = sum(short_vols) / Decimal(str(len(short_vols))) if short_vols else Decimal("1")
-                relative_pct = (long_ret / long_vol) - (short_avg / short_vol)
+                display_relative_pct = (long_ret / long_vol) - (short_avg / short_vol)
                 position["relative_basis"] = "vol_adjusted"
+                position["display_relative_pct"] = display_relative_pct
                 position["long_return_pct"] = long_ret
                 position["short_return_pct"] = short_avg
                 position["long_vol_pct"] = long_vol
                 position["short_vol_pct"] = short_vol
             else:
                 position["relative_basis"] = "raw"
+                position["display_relative_pct"] = relative_pct
                 position["long_return_pct"] = long_ret
                 position["short_return_pct"] = short_avg
-            amount = Decimal(str(position["quote_amount"]))
-            profit = amount * (relative_pct / Decimal("100"))
+            profit = raw_profit
             opened_at = position.get("opened_at", now_time)
             if isinstance(opened_at, str):
                 opened_at = datetime.fromisoformat(opened_at)
             held_minutes = Decimal(str((now_time - opened_at).total_seconds() / 60))
             position["last_relative_pct"] = relative_pct
+            position["long_unrealized_profit"] = long_pnl
+            position["short_unrealized_profit"] = short_pnl
+            position["gross_relative_capital"] = total_capital
             position["unrealized_profit"] = profit
             position["held_minutes"] = held_minutes
             position["min_hold_minutes"] = min_hold_minutes

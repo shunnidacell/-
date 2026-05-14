@@ -383,6 +383,7 @@ function renderRelativePositions(positions) {
     const pnl = Number(position.unrealized_profit || 0);
     const heldMinutes = Number(position.held_minutes || 0);
     const minHoldMinutes = Number(position.min_hold_minutes || 30);
+    const shortTotal = Number(position.short_total_quote_amount || 0);
     return `
       <article class="ranking-row">
         <div>
@@ -392,7 +393,9 @@ function renderRelativePositions(positions) {
         <div>
           <span>Relative ${numberText(position.last_relative_pct)}% ${position.relative_basis === "vol_adjusted" ? "vol調整" : ""}</span>
           <span>Long ${numberText(position.long_return_pct)}% / Short ${numberText(position.short_return_pct)}%</span>
-          <span>${moneyText(position.quote_amount)} USDT / ${escapeHtml(position.mode || "manual")}</span>
+          <span>Long ${moneyText(position.long_quote_amount || position.quote_amount)} / Short total ${moneyText(shortTotal)} USDT</span>
+          <span>Sizing vol Long ${numberText(position.sizing_long_vol_pct, 3)}% / hedge ${escapeHtml(position.hedge_basis || "equal_total_notional")}</span>
+          <span>${escapeHtml(position.mode || "manual")}</span>
           <span>Hold ${numberText(heldMinutes, 1)} / ${numberText(minHoldMinutes, 0)} min</span>
         </div>
         <div class="rank-net ${pnl >= 0 ? "positive" : "negative"}">${pnl >= 0 ? "+" : ""}${moneyText(pnl)}</div>
