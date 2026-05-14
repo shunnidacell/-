@@ -2134,7 +2134,7 @@ class BotRuntime:
             cap = lambda value, limit: max(-limit, min(limit, value))
             score = (
                 cap(return_15m, Decimal("5")) * Decimal("0.5")
-                + cap(return_1h, Decimal("8")) * Decimal("1")
+                + cap(return_1h, Decimal("8")) * Decimal("0.75")
                 + cap(return_4h, Decimal("12")) * Decimal("1")
                 + cap(volume_15m / Decimal("10"), Decimal("5")) * Decimal("1")
                 + cap(volume_1h / Decimal("10"), Decimal("5")) * Decimal("2")
@@ -2142,7 +2142,6 @@ class BotRuntime:
                 + cap(oi_15m / Decimal("10"), Decimal("5")) * Decimal("1")
                 + cap(oi_1h / Decimal("10"), Decimal("5")) * Decimal("2")
                 + cap(oi_4h / Decimal("10"), Decimal("5")) * Decimal("2")
-                + cap(vwap_position, Decimal("4")) * Decimal("1.5")
                 + cap(ema20_position, Decimal("4")) * Decimal("1.5")
                 + category_score * Decimal("2")
                 - funding_overheat * Decimal("2")
@@ -2176,7 +2175,7 @@ class BotRuntime:
             row["volume_growth_score_pct"] = cap(volume_1h, Decimal("50"))
             row["exclude_reasons"] = exclusions
             row["eligible"] = not exclusions
-            row["score_note"] = "15m/1h/4h return + volume + OI + VWAP/EMA + funding/RSI/spread/liquidity"
+            row["score_note"] = "15m/1h/4h return + volume + OI + EMA + funding/RSI/spread/liquidity"
             scored.append(row)
         scored = sorted(scored, key=lambda item: Decimal(str(item["relative_score"])), reverse=True)
         cutoff = max(1, int(len(scored) * 0.2))
@@ -2186,7 +2185,6 @@ class BotRuntime:
             return_1h = Decimal(str(item.get("return_1h_pct") or 0))
             return_4h = Decimal(str(item.get("return_4h_pct") or 0))
             volume_1h = Decimal(str(item.get("volume_change_1h_pct") or 0))
-            vwap_position = Decimal(str(item.get("vwap_position_pct") or 0))
             ema20_position = Decimal(str(item.get("ema20_position_pct") or 0))
             item["rank_percentile"] = (Decimal(str(index)) / Decimal(str(max(1, len(scored) - 1)))) * Decimal("100")
             item["long_candidate"] = (
@@ -2195,7 +2193,6 @@ class BotRuntime:
                 and return_1h > 0
                 and return_4h > 0
                 and volume_1h > 0
-                and vwap_position > 0
                 and ema20_position > 0
             )
             item["short_candidate"] = (
@@ -2203,7 +2200,6 @@ class BotRuntime:
                 and item["eligible"]
                 and return_1h < 0
                 and return_4h < 0
-                and vwap_position < 0
                 and ema20_position < 0
             )
         return scored
