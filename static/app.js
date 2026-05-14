@@ -28,6 +28,8 @@ const scanSuccessEl = document.querySelector("#scan-success");
 const scanNoQuoteEl = document.querySelector("#scan-noquote");
 const scanErrorEl = document.querySelector("#scan-error");
 const loadBarFillEl = document.querySelector("#load-bar-fill");
+const activeSymbolsEl = document.querySelector("#active-symbols");
+const activeSymbolsMetaEl = document.querySelector("#active-symbols-meta");
 const relativeSymbolEl = document.querySelector("#relative-symbol");
 const relativeAmountEl = document.querySelector("#relative-amount");
 const relativeOpenManualButton = document.querySelector("#relative-open-manual");
@@ -256,6 +258,23 @@ function renderRelativeTrades(trades) {
   }
 }
 
+function renderActiveSymbols(state, perf) {
+  if (!activeSymbolsEl) return;
+  const symbols = state.futures_active_symbols || [];
+  const baseCount = state.futures_base_symbols?.length || perf.base_symbol_count || symbols.length;
+  const activeCount = perf.active_symbol_count || symbols.length;
+  if (activeSymbolsMetaEl) {
+    activeSymbolsMetaEl.textContent = `${activeCount}銘柄 / 候補${baseCount}銘柄`;
+  }
+  if (!symbols.length) {
+    activeSymbolsEl.className = "symbol-chip-list empty";
+    activeSymbolsEl.textContent = "起動後に表示します";
+    return;
+  }
+  activeSymbolsEl.className = "symbol-chip-list";
+  activeSymbolsEl.innerHTML = symbols.map((symbol) => `<span class="symbol-chip">${escapeHtml(symbol)}</span>`).join("");
+}
+
 function renderState(state) {
   const marketStatuses = state.market_statuses || [];
   const latestFutures = (state.futures_spread_history || []).at(-1);
@@ -293,6 +312,8 @@ function renderState(state) {
     loadBarFillEl.style.width = `${Math.max(3, Math.min(100, loadPct))}%`;
     loadBarFillEl.className = loadPct >= 100 ? "bad" : loadPct >= 70 ? "warn" : "good";
   }
+
+  renderActiveSymbols(state, perf);
 
   marketsEl.innerHTML = marketStatuses.map((item) => `
     <tr>

@@ -4,7 +4,7 @@ import asyncio
 import json
 import os
 from collections import deque
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -511,6 +511,8 @@ class BotRuntime:
         self.futures_spread_history: deque[dict[str, Any]] = deque(maxlen=500)
         self.futures_market_statuses: list[dict[str, Any]] = []
         self.futures_perf: dict[str, Any] = {}
+        self.futures_base_symbols: list[str] = []
+        self.futures_active_symbols: list[str] = []
         self.balances: list[dict[str, Any]] = []
         self.exchange_handles: dict[str, Any] = {}
         self.preflight_results: list[dict[str, Any]] = []
@@ -600,19 +602,7 @@ class BotRuntime:
                 common_symbols = await self._discover_common_futures_symbols(futures_exchanges)
                 if not common_symbols:
                     raise RuntimeError("No common futures symbols found")
-                config = Config(
-                    exchanges=config.exchanges,
-                    symbols=common_symbols,
-                    trade_size_quote=config.trade_size_quote,
-                    min_net_profit_pct=config.min_net_profit_pct,
-                    default_taker_fee_pct=config.default_taker_fee_pct,
-                    slippage_pct=config.slippage_pct,
-                    poll_seconds=config.poll_seconds,
-                    orderbook_limit=config.orderbook_limit,
-                    mode=config.mode,
-                    live_trading=config.live_trading,
-                    live_confirm=config.live_confirm,
-                )
+                config = replace(config, symbols=common_symbols)
                 self.log("ready", f"Common futures symbols: {len(common_symbols)}")
             filtered_symbols = await self._filter_symbols_with_futures_books(
                 futures_exchanges,
@@ -622,24 +612,21 @@ class BotRuntime:
             if not filtered_symbols:
                 raise RuntimeError("No futures symbols with live order books found")
             if filtered_symbols != config.symbols:
-                config = Config(
-                    exchanges=config.exchanges,
-                    symbols=filtered_symbols,
-                    trade_size_quote=config.trade_size_quote,
-                    min_net_profit_pct=config.min_net_profit_pct,
-                    default_taker_fee_pct=config.default_taker_fee_pct,
-                    slippage_pct=config.slippage_pct,
-                    poll_seconds=config.poll_seconds,
-                    orderbook_limit=config.orderbook_limit,
-                    mode=config.mode,
-                    live_trading=config.live_trading,
-                    live_confirm=config.live_confirm,
-                )
+                config = replace(config, symbols=filtered_symbols)
                 self.log("ready", f"Live-book futures symbols: {len(filtered_symbols)}")
+            hot_poll_seconds = Decimal(os.getenv("FUTURES_HOT_POLL_SECONDS", "3"))
+            if Decimal(str(config.poll_seconds)) > hot_poll_seconds:
+                config = replace(config, poll_seconds=int(hot_poll_seconds))
+                self.log("ready", f"Hot futures poll interval: {config.poll_seconds}s")
+            self.futures_base_symbols = list(config.symbols)
+            self.futures_active_symbols = list(config.symbols)
             self.log("ready", f"FUTURES research {', '.join(config.symbols)}: {', '.join(futures_exchanges)}")
 
             while self.stop_event and not self.stop_event.is_set():
-                await self._record_futures_spread_history(futures_exchanges, config)
+                active_symbols = self._select_hot_futures_symbols(config.symbols)
+                self.futures_active_symbols = active_symbols
+                scan_config = replace(config, symbols=active_symbols)
+                await self._record_futures_spread_history(futures_exchanges, scan_config)
                 latest = self.futures_spread_history[-1] if self.futures_spread_history else {"points": []}
                 self.quotes = []
                 self.market_statuses = self.futures_market_statuses
@@ -668,6 +655,42 @@ class BotRuntime:
         finally:
             self.stopped_at = datetime.now().astimezone().isoformat()
             self.log("info", "Futures research stopped")
+
+    def _select_hot_futures_symbols(self, symbols: list[str]) -> list[str]:
+        if not symbols:
+            return []
+        try:
+            limit = int(os.getenv("FUTURES_HOT_SYMBOL_LIMIT", "24"))
+        except ValueError:
+            limit = 24
+        limit = max(5, min(limit, len(symbols)))
+
+        # First scans stay broad so every shared futures symbol gets a baseline.
+        if len(self.relative_history) < 6 or len(symbols) <= limit:
+            return list(symbols)
+
+        forced = {position.get("symbol") for position in self.futures_positions.values() if position.get("symbol")}
+        scores: dict[str, Decimal] = {}
+        rows = (self.relative_rankings.get("strong") or []) + (self.relative_rankings.get("weak") or [])
+        for row in rows:
+            symbol = str(row.get("symbol", "")).upper()
+            if symbol not in symbols:
+                continue
+            one_hour = abs(Decimal(str(row.get("return_1h_pct") or 0)))
+            four_hour = abs(Decimal(str(row.get("return_4h_pct") or 0)))
+            scores[symbol] = max(scores.get(symbol, Decimal("0")), one_hour + (four_hour * Decimal("0.35")))
+
+        if not scores:
+            return list(symbols[:limit])
+
+        ranked = sorted(symbols, key=lambda symbol: (symbol in forced, scores.get(symbol, Decimal("0"))), reverse=True)
+        active: list[str] = []
+        for symbol in list(forced) + ranked:
+            if symbol in symbols and symbol not in active:
+                active.append(symbol)
+            if len(active) >= max(limit, len(forced)):
+                break
+        return active
 
     async def _prepare_exchanges(self, config: Config):
         exchanges = [make_exchange(exchange_id, private=config.mode == "live") for exchange_id in config.exchanges]
@@ -995,6 +1018,8 @@ class BotRuntime:
             "last_scan_seconds": Decimal(str(round(elapsed, 3))),
             "poll_seconds": Decimal(str(config.poll_seconds)),
             "symbol_count": len(config.symbols),
+            "base_symbol_count": len(self.futures_base_symbols),
+            "active_symbol_count": len(self.futures_active_symbols or config.symbols),
             "exchange_count": len(exchanges),
             "request_count": len(config.symbols) * len(exchanges),
             "ok_count": status_counts.get("ok", 0),
@@ -1692,6 +1717,8 @@ class BotRuntime:
                 }
             ),
             "futures_perf": to_jsonable(self.futures_perf),
+            "futures_base_symbols": self.futures_base_symbols,
+            "futures_active_symbols": self.futures_active_symbols,
             "relative_rankings": self.relative_rankings,
             "relative_positions": to_jsonable(list(self.relative_positions.values())),
             "relative_closed_trades": list(self.relative_closed_trades),

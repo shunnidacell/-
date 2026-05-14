@@ -442,6 +442,32 @@ select:focus {
   background: var(--danger);
 }
 
+.symbol-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 42px;
+}
+
+.symbol-chip-list.empty {
+  align-items: center;
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.symbol-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .relative-controls {
   display: grid;
   grid-template-columns: minmax(0, 1.5fr) minmax(120px, 0.7fr) auto auto;
