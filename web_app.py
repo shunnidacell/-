@@ -5,7 +5,7 @@ import json
 import os
 from collections import deque
 from dataclasses import asdict, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -106,6 +106,8 @@ class HistoricalCandlesRequest(BaseModel):
     exchanges: str = Field(default="")
     timeframe: str = Field(default="1m")
     days: int = Field(default=7, ge=1, le=730)
+    start_date: str = Field(default="")
+    end_date: str = Field(default="")
     limit_per_market: int = Field(default=1000, ge=50, le=1500)
 
 
@@ -1147,8 +1149,16 @@ class BotRuntime:
         if not symbols or not exchanges:
             raise HTTPException(status_code=400, detail="symbols and exchanges are required")
         timeframe_ms = self._timeframe_ms(request.timeframe)
-        end_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
-        start_ms = end_ms - (request.days * 86_400_000)
+        if request.start_date:
+            start_dt = datetime.fromisoformat(request.start_date).replace(tzinfo=timezone.utc)
+            end_dt = datetime.fromisoformat(request.end_date or request.start_date).replace(tzinfo=timezone.utc)
+            if request.end_date == "" or end_dt <= start_dt:
+                end_dt = start_dt + timedelta(days=1)
+            start_ms = int(start_dt.timestamp() * 1000)
+            end_ms = int(end_dt.timestamp() * 1000)
+        else:
+            end_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+            start_ms = end_ms - (request.days * 86_400_000)
         wanted_limit = min(request.limit_per_market, max(50, int((end_ms - start_ms) / timeframe_ms)))
         results = []
         total_candles = 0
