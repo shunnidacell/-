@@ -2154,25 +2154,26 @@ class BotRuntime:
             ) / Decimal("2")
             price_surge_penalty = surge_1h_penalty + surge_4h_penalty + rsi_extreme_penalty + vwap_divergence_penalty
             cap = lambda value, limit: max(-limit, min(limit, value))
-            score = (
-                cap(return_15m, Decimal("5")) * Decimal("0.5")
-                + cap(return_1h_score, Decimal("1")) * Decimal("0.75")
-                + cap(return_4h_score, Decimal("1")) * Decimal("1")
-                + cap(volume_15m / Decimal("10"), Decimal("5")) * Decimal("1")
-                + cap(volume_1h / Decimal("10"), Decimal("5")) * Decimal("2")
-                + cap(volume_4h / Decimal("10"), Decimal("5")) * Decimal("1.5")
-                + cap(oi_15m / Decimal("10"), Decimal("5")) * Decimal("1")
-                + cap(oi_1h / Decimal("10"), Decimal("5")) * Decimal("2")
-                + cap(oi_4h / Decimal("10"), Decimal("5")) * Decimal("2")
-                + cap(ema20_position, Decimal("4")) * Decimal("1.5")
-                + category_score * Decimal("2")
-                - funding_overheat * Decimal("2")
-                - rsi_overheat * Decimal("1")
-                - spread_penalty * Decimal("2")
-                - low_liquidity_penalty * Decimal("2")
-                - oi_24h_overheat * Decimal("2")
-                - price_surge_penalty * Decimal("2")
-            )
+            score_parts = {
+                "15m_return": cap(return_15m, Decimal("5")) * Decimal("0.5"),
+                "1h_return_rank": cap(return_1h_score, Decimal("1")) * Decimal("0.75"),
+                "4h_return_rank": cap(return_4h_score, Decimal("1")) * Decimal("1"),
+                "15m_volume": cap(volume_15m / Decimal("10"), Decimal("5")) * Decimal("1"),
+                "1h_volume": cap(volume_1h / Decimal("10"), Decimal("5")) * Decimal("2"),
+                "4h_volume": cap(volume_4h / Decimal("10"), Decimal("5")) * Decimal("1.5"),
+                "15m_oi": cap(oi_15m / Decimal("10"), Decimal("5")) * Decimal("1"),
+                "1h_oi": cap(oi_1h / Decimal("10"), Decimal("5")) * Decimal("2"),
+                "4h_oi": cap(oi_4h / Decimal("10"), Decimal("5")) * Decimal("2"),
+                "ema20_position": cap(ema20_position, Decimal("4")) * Decimal("1.5"),
+                "relative_rank": category_score * Decimal("2"),
+                "funding_overheat": -(funding_overheat * Decimal("2")),
+                "rsi_overheat": -(rsi_overheat * Decimal("1")),
+                "wide_spread": -(spread_penalty * Decimal("2")),
+                "low_liquidity": -(low_liquidity_penalty * Decimal("2")),
+                "24h_oi_overheat": -(oi_24h_overheat * Decimal("2")),
+                "price_surge": -(price_surge_penalty * Decimal("2")),
+            }
+            score = sum(score_parts.values())
             exclusions = []
             if liquidity < min_liquidity:
                 exclusions.append("low_liquidity")
@@ -2187,6 +2188,7 @@ class BotRuntime:
             row["relative_score"] = score
             row["raw_relative_score"] = score
             row["relative_score"] = self._smoothed_relative_score(str(row.get("symbol", "")), score)
+            row["score_parts"] = score_parts
             row["vwap_position_pct"] = vwap_position
             row["ema20_position_pct"] = ema20_position
             row["return_1h_score"] = return_1h_score

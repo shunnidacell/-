@@ -685,6 +685,23 @@ select:focus {
   font-weight: 900;
 }
 
+.score-breakdown {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.score-breakdown span {
+  display: inline-flex;
+  width: fit-content;
+  padding: 4px 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  font-size: 11px;
+}
+
 .signal-badge {
   display: inline-flex;
   align-items: center;

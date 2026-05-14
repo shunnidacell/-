@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Futures Spread Research</title>
-    <link rel="stylesheet" href="/static/styles.css?v=relative-normalized-return" />
+    <link rel="stylesheet" href="/static/styles.css?v=relative-score-breakdown" />
   </head>
   <body>
     <header class="app-header">
@@ -207,6 +207,8 @@
           </div>
           <h3 class="subhead">相対強弱 建玉</h3>
           <div id="relative-positions" class="ranking-list empty">現在の建玉はありません</div>
+          <h3 class="subhead">All Symbols Score Breakdown</h3>
+          <div id="relative-all" class="ranking-list empty">履歴が貯まると表示します</div>
           <h3 class="subhead">Relative History</h3>
           <div class="table-wrap">
             <table>
@@ -385,6 +387,6 @@
       </section>
     </div>
 
-    <script src="/static/app.js?v=relative-normalized-return"></script>
+    <script src="/static/app.js?v=relative-score-breakdown"></script>
   </body>
 </html>

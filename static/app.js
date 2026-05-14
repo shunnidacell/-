@@ -45,6 +45,7 @@ const relativeOpenManualButton = document.querySelector("#relative-open-manual")
 const relativeOpenAutoButton = document.querySelector("#relative-open-auto");
 const relativeStrongEl = document.querySelector("#relative-strong");
 const relativeWeakEl = document.querySelector("#relative-weak");
+const relativeAllEl = document.querySelector("#relative-all");
 const relativePositionsEl = document.querySelector("#relative-positions");
 const relativeTradesEl = document.querySelector("#relative-trades");
 
@@ -250,9 +251,42 @@ function renderCandlestick(candles, meta = {}) {
   `;
 }
 
-function renderRelativeList(target, rows, emptyText) {
+function renderScoreBreakdown(item) {
+  const labels = {
+    "15m_return": "15m return",
+    "1h_return_rank": "1h return rank",
+    "4h_return_rank": "4h return rank",
+    "15m_volume": "15m volume",
+    "1h_volume": "1h volume",
+    "4h_volume": "4h volume",
+    "15m_oi": "15m OI",
+    "1h_oi": "1h OI",
+    "4h_oi": "4h OI",
+    "ema20_position": "EMA20",
+    "relative_rank": "relative rank",
+    "funding_overheat": "funding",
+    "rsi_overheat": "RSI",
+    "wide_spread": "spread",
+    "low_liquidity": "liquidity",
+    "24h_oi_overheat": "24h OI",
+    "price_surge": "surge",
+  };
+  const parts = item.score_parts || {};
+  const entries = Object.entries(parts).filter(([, value]) => Math.abs(Number(value || 0)) >= 0.005);
+  if (!entries.length) return '<div class="score-breakdown muted">Score parts: no active points</div>';
+  return `
+    <div class="score-breakdown">
+      ${entries.map(([key, value]) => {
+        const number = Number(value || 0);
+        return `<span class="${number >= 0 ? "positive" : "negative"}">${escapeHtml(labels[key] || key)} ${number >= 0 ? "+" : ""}${numberText(number, 2)}</span>`;
+      }).join("")}
+    </div>
+  `;
+}
+
+function renderRelativeList(target, rows, emptyText, limit = 6) {
   if (!target) return;
-  const items = (rows || []).slice(0, 6);
+  const items = (rows || []).slice(0, limit);
   if (!items.length) {
     target.className = "ranking-list empty";
     target.textContent = emptyText;
@@ -288,6 +322,8 @@ function renderRelativeList(target, rows, emptyText) {
           <span>ReturnScore 1h ${numberText(item.return_1h_score, 2)} / 4h ${numberText(item.return_4h_score, 2)} / SurgePenalty ${numberText(item.price_surge_penalty, 2)}</span>
           <span>VWAP ${numberText(item.vwap_position_pct, 3)}% / EMA20 ${numberText(item.ema20_position_pct, 3)}% / RSI ${numberText(item.rsi, 1)} / ATR ${numberText(item.atr_pct, 3)}%</span>
           <span>Spread ${numberText(item.spread_pct, 4)}% / Depth ${moneyText(item.liquidity_quote)} / Excl ${escapeHtml(exclusions)}</span>
+          <span>Raw ${numberText(item.raw_relative_score, 2)}pt / Smoothed ${numberText(item.relative_score, 2)}pt</span>
+          ${renderScoreBreakdown(item)}
           ${chartHtml}
         </div>
         <div class="chart-action-cell">
@@ -498,6 +534,7 @@ function renderState(state) {
   renderPositions(state.futures_positions || []);
   renderRelativeList(relativeStrongEl, state.relative_rankings?.strong || [], "履歴が貯まると表示します");
   renderRelativeList(relativeWeakEl, state.relative_rankings?.weak || [], "履歴が貯まると表示します");
+  renderRelativeList(relativeAllEl, state.relative_rankings?.features || [], "履歴が貯まると表示します", 200);
   renderRelativePositions(state.relative_positions || []);
 
   renderRelativeTrades(state.relative_closed_trades || []);
