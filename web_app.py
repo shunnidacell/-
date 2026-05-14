@@ -2970,20 +2970,21 @@ class BotRuntime:
             return
         total_quote = Decimal(os.getenv("RELATIVE_PAPER_QUOTE", "10"))
         per_long_quote = total_quote / Decimal(str(basket_size))
-        for long_symbol in long_symbols:
+        for index, long_symbol in enumerate(long_symbols):
             if len([position for position in self.relative_positions.values() if position.get("mode") == "auto_top_bottom"]) >= basket_size:
                 break
-            if long_symbol in short_symbols:
+            short_symbol = short_symbols[index]
+            if long_symbol == short_symbol:
                 continue
             if long_symbol in existing_auto_longs:
                 continue
-            key = f"{long_symbol}|{','.join(short_symbols)}"
+            key = f"{long_symbol}|{short_symbol}"
             if key in self.relative_positions:
                 continue
             self.open_relative_position(
                 RelativeTradeRequest(
                     symbol=long_symbol,
-                    short_symbols=short_symbols,
+                    short_symbols=[short_symbol],
                     mode="auto_top_bottom",
                     quote_amount=float(per_long_quote),
                 ),
