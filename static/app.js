@@ -189,7 +189,8 @@ function renderPositions(positions) {
       </div>
       <div>
         <span>Entry ${numberText(position.entry_spread_pct)}%</span>
-        <span>Last ${numberText(position.last_spread_pct)}% / Add ${position.add_count || 0}</span>
+        <span>Last ${numberText(position.last_spread_pct)}% / Max ${numberText(position.max_spread_pct)}%</span>
+        <span>Add ${position.add_count || 0} / 想定上限 ${numberText(position.max_expected_spread_pct)}%</span>
       </div>
       <div class="rank-net ${unrealized >= 0 ? "positive" : "negative"}">${unrealized >= 0 ? "+" : ""}${moneyText(unrealized)}</div>
     </article>

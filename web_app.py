@@ -1829,15 +1829,17 @@ class BotRuntime:
 
     def _update_futures_paper_strategy(self, points: list[dict[str, Any]]) -> None:
         entry_threshold = Decimal(os.getenv("FUTURES_PAPER_ENTRY_SPREAD_PCT", "0.5"))
+        max_expected_spread = Decimal(os.getenv("FUTURES_MAX_EXPECTED_SPREAD_PCT", "4.0"))
         add_thresholds = [
             Decimal(os.getenv("FUTURES_PAPER_ADD_SPREAD_PCT", "1.0")),
             Decimal(os.getenv("FUTURES_PAPER_SECOND_ADD_SPREAD_PCT", "1.5")),
             Decimal(os.getenv("FUTURES_PAPER_THIRD_ADD_SPREAD_PCT", "2.0")),
             Decimal(os.getenv("FUTURES_PAPER_FOURTH_ADD_SPREAD_PCT", "3.0")),
+            max_expected_spread,
         ]
         take_profit_threshold = Decimal(os.getenv("FUTURES_EXIT_SPREAD_PCT", "0.2"))
-        compromise_minutes = Decimal(os.getenv("FUTURES_COMPROMISE_MINUTES", "60"))
-        compromise_threshold = Decimal(os.getenv("FUTURES_COMPROMISE_EXIT_SPREAD_PCT", "0.5"))
+        compromise_minutes = Decimal(os.getenv("FUTURES_COMPROMISE_MINUTES", "180"))
+        compromise_threshold = Decimal(os.getenv("FUTURES_COMPROMISE_EXIT_SPREAD_PCT", "0.8"))
         quote_amount = Decimal(os.getenv("FUTURES_PAPER_QUOTE", "10"))
         now = datetime.now(timezone.utc)
 
@@ -1858,11 +1860,17 @@ class BotRuntime:
                         "opened_at": now,
                         "add_count": 0,
                         "last_spread_pct": spread,
+                        "max_spread_pct": spread,
+                        "max_expected_spread_pct": max_expected_spread,
+                        "risk_mode": "no_stop_wait_reversion",
                     }
                     self.log("paper", f"FUTURES PAPER entry {symbol}: {spread:.4f}% {point.get('direction', '')}")
                 continue
 
             position["last_spread_pct"] = spread
+            position["max_spread_pct"] = max(Decimal(str(position.get("max_spread_pct", spread))), spread)
+            if spread > max_expected_spread:
+                position["above_expected_max"] = True
             held_minutes = Decimal(str((now - position["opened_at"]).total_seconds() / 60))
             next_add_threshold = None
             add_count = int(position["add_count"])
@@ -1903,10 +1911,12 @@ class BotRuntime:
                 "mode": "futures_paper",
                 "status": "take_profit" if should_take_profit else "compromise_exit",
                 "entry_spread_pct": entry,
+                "max_spread_pct": position.get("max_spread_pct", spread),
                 "exit_spread_pct": spread,
                 "held_minutes": held_minutes,
                 "add_count": position["add_count"],
                 "direction": position.get("direction", ""),
+                "risk_mode": position.get("risk_mode", ""),
             }
             json_trade = to_jsonable(trade)
             self.futures_closed_trades.appendleft(json_trade)
