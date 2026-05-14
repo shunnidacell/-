@@ -1652,6 +1652,8 @@ class BotRuntime:
     def _record_relative_snapshot(self, quotes: list[dict[str, Any]]) -> None:
         by_symbol: dict[str, list[Decimal]] = {}
         liquidity_by_symbol: dict[str, Decimal] = {}
+        bid_liquidity_by_symbol: dict[str, Decimal] = {}
+        ask_liquidity_by_symbol: dict[str, Decimal] = {}
         spread_by_symbol: dict[str, list[Decimal]] = {}
         bid_by_symbol: dict[str, list[Decimal]] = {}
         ask_by_symbol: dict[str, list[Decimal]] = {}
@@ -1667,6 +1669,8 @@ class BotRuntime:
             ask_cap = Decimal(str(quote.get("ask_capacity_quote") or 0))
             capacity = min(bid_cap, ask_cap)
             liquidity_by_symbol[quote["symbol"]] = liquidity_by_symbol.get(quote["symbol"], Decimal("0")) + capacity
+            bid_liquidity_by_symbol[quote["symbol"]] = bid_liquidity_by_symbol.get(quote["symbol"], Decimal("0")) + bid_cap
+            ask_liquidity_by_symbol[quote["symbol"]] = ask_liquidity_by_symbol.get(quote["symbol"], Decimal("0")) + ask_cap
         mids = {
             symbol: sum(values) / Decimal(str(len(values)))
             for symbol, values in by_symbol.items()
@@ -1696,6 +1700,8 @@ class BotRuntime:
             "asks": asks,
             "spread_pct": spreads,
             "liquidity_quote": liquidity_by_symbol,
+            "bid_liquidity_quote": bid_liquidity_by_symbol,
+            "ask_liquidity_quote": ask_liquidity_by_symbol,
         }
         self.relative_history.append(to_jsonable(snapshot))
         self.relative_rankings = self._build_relative_rankings()
@@ -1871,6 +1877,28 @@ class BotRuntime:
             return None
         old = Decimal(str(base_liquidity))
         new = Decimal(str(latest_liquidity))
+        if old <= 0:
+            return None
+        return ((new - old) / old) * Decimal("100")
+
+    def _depth_growth_minutes(self, symbol: str, key: str, lookback_minutes: int) -> Decimal | None:
+        if len(self.relative_history) < 2:
+            return None
+        latest = self.relative_history[-1]
+        latest_time = datetime.fromisoformat(latest["timestamp"])
+        target_age = lookback_minutes * 60
+        base = self.relative_history[0]
+        for item in reversed(self.relative_history):
+            item_time = datetime.fromisoformat(item["timestamp"])
+            if (latest_time - item_time).total_seconds() >= target_age:
+                base = item
+                break
+        latest_value = latest.get(key, {}).get(symbol)
+        base_value = base.get(key, {}).get(symbol)
+        if latest_value is None or base_value is None:
+            return None
+        old = Decimal(str(base_value))
+        new = Decimal(str(latest_value))
         if old <= 0:
             return None
         return ((new - old) / old) * Decimal("100")
@@ -2124,6 +2152,10 @@ class BotRuntime:
             volume_15m = Decimal(str(row.get("volume_change_15m_pct") or 0))
             volume_1h = Decimal(str(row.get("volume_change_1h_pct") or 0))
             volume_4h = Decimal(str(row.get("volume_change_4h_pct") or 0))
+            bid_depth_1h = Decimal(str(row.get("bid_depth_change_1h_pct") or 0))
+            ask_depth_1h = Decimal(str(row.get("ask_depth_change_1h_pct") or 0))
+            bid_depth_4h = Decimal(str(row.get("bid_depth_change_4h_pct") or 0))
+            ask_depth_4h = Decimal(str(row.get("ask_depth_change_4h_pct") or 0))
             oi_15m = Decimal(str(row.get("oi_change_15m_pct") or 0))
             oi_1h = Decimal(str(row.get("oi_change_1h_pct") or 0))
             oi_4h = Decimal(str(row.get("oi_change_4h_pct") or 0))
@@ -2154,6 +2186,8 @@ class BotRuntime:
             ) / Decimal("2")
             price_surge_penalty = surge_1h_penalty + surge_4h_penalty + rsi_extreme_penalty + vwap_divergence_penalty
             cap = lambda value, limit: max(-limit, min(limit, value))
+            depth_pressure = cap((bid_depth_1h - ask_depth_1h) / Decimal("10"), Decimal("4")) * Decimal("1.5")
+            depth_pressure += cap((bid_depth_4h - ask_depth_4h) / Decimal("10"), Decimal("4")) * Decimal("1")
             score_parts = {
                 "15m_return": cap(return_15m, Decimal("5")) * Decimal("0.5"),
                 "1h_return_rank": cap(return_1h_score, Decimal("1")) * Decimal("0.75"),
@@ -2164,6 +2198,7 @@ class BotRuntime:
                 "15m_oi": cap(oi_15m / Decimal("10"), Decimal("5")) * Decimal("1"),
                 "1h_oi": cap(oi_1h / Decimal("10"), Decimal("5")) * Decimal("2"),
                 "4h_oi": cap(oi_4h / Decimal("10"), Decimal("5")) * Decimal("2"),
+                "bid_ask_depth_pressure": depth_pressure,
                 "ema20_position": cap(ema20_position, Decimal("4")) * Decimal("1.5"),
                 "relative_rank": category_score * Decimal("2"),
                 "funding_overheat": -(funding_overheat * Decimal("2")),
@@ -2193,6 +2228,7 @@ class BotRuntime:
             row["ema20_position_pct"] = ema20_position
             row["return_1h_score"] = return_1h_score
             row["return_4h_score"] = return_4h_score
+            row["bid_ask_depth_pressure_score"] = depth_pressure
             row["category_relative_strength_score"] = category_score
             row["funding_overheat_penalty"] = funding_overheat
             row["rsi_overheat_penalty"] = rsi_overheat
@@ -2278,6 +2314,12 @@ class BotRuntime:
                     "volume_change_1h_pct": self._liquidity_growth_minutes(symbol, 60),
                     "volume_change_4h_pct": self._liquidity_growth_minutes(symbol, 240),
                     "volume_source": "orderbook_liquidity_proxy",
+                    "bid_liquidity_quote": (latest.get("bid_liquidity_quote") or {}).get(symbol, 0),
+                    "ask_liquidity_quote": (latest.get("ask_liquidity_quote") or {}).get(symbol, 0),
+                    "bid_depth_change_1h_pct": self._depth_growth_minutes(symbol, "bid_liquidity_quote", 60),
+                    "ask_depth_change_1h_pct": self._depth_growth_minutes(symbol, "ask_liquidity_quote", 60),
+                    "bid_depth_change_4h_pct": self._depth_growth_minutes(symbol, "bid_liquidity_quote", 240),
+                    "ask_depth_change_4h_pct": self._depth_growth_minutes(symbol, "ask_liquidity_quote", 240),
                     "volume_since_9jst": self._liquidity_since_jst_9(symbol),
                     "price_return_since_9jst_series": price_chart["values"],
                     "price_return_since_9jst_times": price_chart["times"],
