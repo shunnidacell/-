@@ -934,10 +934,12 @@ class BotRuntime:
         for item in checks:
             if isinstance(item, dict) and item.get("status") == "ok":
                 status_by_symbol.setdefault(item["symbol"], set()).add(item["exchange_id"])
-        filtered = [symbol for symbol in symbols if status_by_symbol.get(symbol, set()) >= set(exchange_ids)]
+        min_exchanges = int(os.getenv("FUTURES_MIN_EXCHANGES_PER_SYMBOL", "2"))
+        min_exchanges = max(2, min(min_exchanges, len(exchange_ids)))
+        filtered = [symbol for symbol in symbols if len(status_by_symbol.get(symbol, set())) >= min_exchanges]
         removed = len(symbols) - len(filtered)
         if removed:
-            self.log("ready", f"Filtered {removed} symbols without live books on all futures exchanges")
+            self.log("ready", f"Filtered {removed} symbols with fewer than {min_exchanges} live futures exchanges")
         return filtered
 
     def _find_usdt_swap_symbol(self, markets: dict[str, Any], spot_symbol: str) -> str | None:
