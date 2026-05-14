@@ -671,6 +671,11 @@ class BotRuntime:
             return list(symbols)
 
         forced = {position.get("symbol") for position in self.futures_positions.values() if position.get("symbol")}
+        for position in self.relative_positions.values():
+            if position.get("long_symbol"):
+                forced.add(position["long_symbol"])
+            for symbol in position.get("short_symbols", []):
+                forced.add(symbol)
         scores: dict[str, Decimal] = {}
         rows = (self.relative_rankings.get("strong") or []) + (self.relative_rankings.get("weak") or [])
         for row in rows:
@@ -1446,7 +1451,38 @@ class BotRuntime:
         basket = [item for item in weak if item.get("symbol") != long_symbol]
         return basket[:count]
 
-    def open_relative_position(self, request: RelativeTradeRequest) -> dict[str, Any]:
+    async def open_relative_position_async(self, request: RelativeTradeRequest) -> dict[str, Any]:
+        latest_mids = dict(self.relative_history[-1]["mids"]) if self.relative_history else {}
+        symbols = [request.symbol.strip().upper()] + [symbol.strip().upper() for symbol in request.short_symbols]
+        symbols = [symbol if "/" in symbol else f"{symbol}/USDT" for symbol in symbols if symbol]
+        missing = [symbol for symbol in symbols if symbol not in latest_mids]
+        for symbol in missing:
+            mid = await self._fetch_relative_mid(symbol)
+            if mid is not None:
+                latest_mids[symbol] = mid
+        return self.open_relative_position(request, latest_mids=latest_mids)
+
+    async def _fetch_relative_mid(self, symbol: str) -> Decimal | None:
+        exchange_ids = [item.lower() for item in parse_csv(self.settings.futures_exchanges)]
+        mids = []
+        for exchange_id in exchange_ids:
+            try:
+                book = await self._fetch_direct_futures_orderbook(exchange_id, symbol, max(5, int(self.settings.orderbook_limit)))
+                bids = book.get("bids") or []
+                asks = book.get("asks") or []
+                if not bids or not asks:
+                    continue
+                bid = Decimal(str(bids[0][0]))
+                ask = Decimal(str(asks[0][0]))
+                if bid > 0 and ask > 0:
+                    mids.append((bid + ask) / Decimal("2"))
+            except Exception:
+                continue
+        if not mids:
+            return None
+        return sum(mids) / Decimal(str(len(mids)))
+
+    def open_relative_position(self, request: RelativeTradeRequest, latest_mids: dict[str, Any] | None = None) -> dict[str, Any]:
         rankings = self._build_relative_rankings()
         self.relative_rankings = rankings
         strong = rankings.get("strong", [])
@@ -1457,7 +1493,7 @@ class BotRuntime:
             long_symbol = strong[0]["symbol"]
         if "/" not in long_symbol:
             long_symbol = f"{long_symbol}/USDT"
-        latest_mids = self.relative_history[-1]["mids"] if self.relative_history else {}
+        latest_mids = latest_mids or (self.relative_history[-1]["mids"] if self.relative_history else {})
         if long_symbol not in latest_mids:
             raise HTTPException(status_code=400, detail=f"{long_symbol} price is not ready")
         requested_shorts = [symbol.strip().upper() for symbol in request.short_symbols if symbol.strip()]
@@ -1870,7 +1906,7 @@ async def preflight(request: PreflightRequest):
 
 @app.post("/api/relative/open")
 async def relative_open(request: RelativeTradeRequest):
-    runtime.open_relative_position(request)
+    await runtime.open_relative_position_async(request)
     return runtime.state()
 
 
