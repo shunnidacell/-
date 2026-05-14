@@ -1844,7 +1844,7 @@ class BotRuntime:
     def _refresh_relative_pnl(self, close_on_threshold: bool = True) -> None:
         latest_mids = self.relative_history[-1]["mids"] if self.relative_history else {}
         unrealized = Decimal("0")
-        take_profit = Decimal(os.getenv("RELATIVE_TAKE_PROFIT_PCT", "2.0"))
+        take_profit = Decimal(os.getenv("RELATIVE_TAKE_PROFIT_PCT", "5.0"))
         stop_loss = Decimal(os.getenv("RELATIVE_STOP_LOSS_PCT", "-1.5"))
         to_close: list[tuple[str, str]] = []
         for position_id, position in self.relative_positions.items():
