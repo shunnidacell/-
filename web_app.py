@@ -1893,7 +1893,7 @@ class BotRuntime:
             self.close_relative_position(position_id, status=status)
 
     def _update_futures_paper_strategy(self, points: list[dict[str, Any]]) -> None:
-        entry_threshold = Decimal(os.getenv("FUTURES_PAPER_ENTRY_SPREAD_PCT", "0.25"))
+        entry_threshold = Decimal(os.getenv("FUTURES_PAPER_ENTRY_SPREAD_PCT", "0.05"))
         max_expected_spread = Decimal(os.getenv("FUTURES_MAX_EXPECTED_SPREAD_PCT", "4.0"))
         add_thresholds = [
             Decimal(os.getenv("FUTURES_PAPER_ADD_SPREAD_PCT", "1.0")),
@@ -1902,9 +1902,9 @@ class BotRuntime:
             Decimal(os.getenv("FUTURES_PAPER_FOURTH_ADD_SPREAD_PCT", "3.0")),
             max_expected_spread,
         ]
-        take_profit_threshold = Decimal(os.getenv("FUTURES_EXIT_SPREAD_PCT", "0.2"))
-        compromise_minutes = Decimal(os.getenv("FUTURES_COMPROMISE_MINUTES", "180"))
-        compromise_threshold = Decimal(os.getenv("FUTURES_COMPROMISE_EXIT_SPREAD_PCT", "0.8"))
+        take_profit_threshold = Decimal(os.getenv("FUTURES_EXIT_SPREAD_PCT", "0.0"))
+        compromise_minutes = Decimal(os.getenv("FUTURES_COMPROMISE_MINUTES", "30"))
+        compromise_threshold = Decimal(os.getenv("FUTURES_COMPROMISE_EXIT_SPREAD_PCT", "0.05"))
         quote_amount = Decimal(os.getenv("FUTURES_PAPER_QUOTE", "10"))
         now = datetime.now(timezone.utc)
 
