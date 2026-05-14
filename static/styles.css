@@ -699,7 +699,8 @@ select:focus {
 
 .mini-volume-chart line {
   stroke: var(--line-strong);
-  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  stroke-width: 1.2;
 }
 
 .mini-volume-chart polyline {

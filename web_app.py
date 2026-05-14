@@ -537,8 +537,8 @@ class BotRuntime:
         self.futures_closed_trades: deque[dict[str, Any]] = deque(maxlen=300)
         self.futures_unrealized_profit = Decimal("0")
         self.futures_realized_profit = Decimal("0")
-        self.relative_history: deque[dict[str, Any]] = deque(maxlen=240)
-        self.relative_feature_history: deque[dict[str, Any]] = deque(maxlen=240)
+        self.relative_history: deque[dict[str, Any]] = deque(maxlen=12000)
+        self.relative_feature_history: deque[dict[str, Any]] = deque(maxlen=12000)
         self.relative_rankings: dict[str, Any] = {}
         self.relative_positions: dict[str, dict[str, Any]] = {}
         self.relative_closed_trades: deque[dict[str, Any]] = deque(maxlen=200)
@@ -1806,7 +1806,30 @@ class BotRuntime:
             item_time = datetime.fromisoformat(item["timestamp"]).astimezone(jst)
             if item_time >= start_jst and symbol in item.get("liquidity_quote", {}):
                 values.append(Decimal(str(item["liquidity_quote"][symbol])))
-        return values[-60:]
+        return values[-240:]
+
+    def _price_return_since_jst_9_series(self, symbol: str) -> list[Decimal]:
+        if not self.relative_history:
+            return []
+        latest_time = datetime.fromisoformat(self.relative_history[-1]["timestamp"])
+        jst = timezone(timedelta(hours=9))
+        latest_jst = latest_time.astimezone(jst)
+        start_jst = latest_jst.replace(hour=9, minute=0, second=0, microsecond=0)
+        if latest_jst < start_jst:
+            start_jst -= timedelta(days=1)
+        prices = []
+        for item in self.relative_history:
+            item_time = datetime.fromisoformat(item["timestamp"]).astimezone(jst)
+            if item_time >= start_jst and symbol in item.get("mids", {}):
+                price = Decimal(str(item["mids"][symbol]))
+                if price > 0:
+                    prices.append(price)
+        if not prices:
+            return []
+        base = prices[0]
+        if base <= 0:
+            return []
+        return [((price - base) / base) * Decimal("100") for price in prices[-240:]]
 
     def _smoothed_relative_score(self, symbol: str, current_score: Decimal, lookback_items: int = 12) -> Decimal:
         scores = [current_score]
@@ -1880,6 +1903,7 @@ class BotRuntime:
                     "volume_growth_pct": self._liquidity_growth_pct(symbol),
                     "volume_source": "orderbook_liquidity_proxy",
                     "volume_since_9jst": self._liquidity_since_jst_9(symbol),
+                    "price_return_since_9jst_series": self._price_return_since_jst_9_series(symbol),
                     "open_interest": None,
                     "funding_rate": None,
                     "liquidation": None,
