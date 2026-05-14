@@ -545,6 +545,8 @@ class BotRuntime:
         self.relative_realized_profit = Decimal("0")
         self.relative_unrealized_profit = Decimal("0")
         self.historical_candle_status: dict[str, Any] = {}
+        self._historical_candle_cache_mtime: float | None = None
+        self._historical_candle_cache: dict[str, dict[str, Any]] = {}
         self.demo = DemoBroker()
         self.settings = load_saved_settings() or config_to_settings(load_config())
         self.last_error: str | None = None
@@ -1852,6 +1854,100 @@ class BotRuntime:
             "times": [item["time"] for item in sampled],
         }
 
+    def _load_historical_candle_cache(self) -> dict[str, dict[str, Any]]:
+        if not HISTORICAL_CANDLE_LOG_PATH.exists():
+            return {}
+        mtime = HISTORICAL_CANDLE_LOG_PATH.stat().st_mtime
+        if self._historical_candle_cache_mtime == mtime:
+            return self._historical_candle_cache
+        latest: dict[str, dict[str, Any]] = {}
+        with HISTORICAL_CANDLE_LOG_PATH.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                symbol = str(item.get("symbol") or "").upper()
+                candles = item.get("candles") or []
+                if not symbol or not candles:
+                    continue
+                previous = latest.get(symbol)
+                if previous is None:
+                    latest[symbol] = item
+                    continue
+                previous_days = int(previous.get("days") or 0)
+                item_days = int(item.get("days") or 0)
+                previous_count = int(previous.get("count") or len(previous.get("candles") or []))
+                item_count = int(item.get("count") or len(candles))
+                if (item_days, item_count, str(item.get("timestamp") or "")) >= (
+                    previous_days,
+                    previous_count,
+                    str(previous.get("timestamp") or ""),
+                ):
+                    latest[symbol] = item
+        self._historical_candle_cache_mtime = mtime
+        self._historical_candle_cache = latest
+        return latest
+
+    def _historical_candles_for_symbol(self, symbol: str, max_bars: int = 180) -> dict[str, Any]:
+        item = self._load_historical_candle_cache().get(symbol.upper())
+        raw_candles = item.get("candles") if item else None
+        if not raw_candles:
+            return {"candles": [], "timeframe": "", "days": 0, "exchange": ""}
+        candles = []
+        for raw in raw_candles:
+            try:
+                candles.append(
+                    {
+                        "time": int(raw["time"]),
+                        "open": Decimal(str(raw["open"])),
+                        "high": Decimal(str(raw["high"])),
+                        "low": Decimal(str(raw["low"])),
+                        "close": Decimal(str(raw["close"])),
+                    }
+                )
+            except Exception:
+                continue
+        candles = [candle for candle in sorted(candles, key=lambda value: value["time"]) if candle["open"] > 0]
+        if not candles:
+            return {"candles": [], "timeframe": "", "days": 0, "exchange": ""}
+        latest_time = candles[-1]["time"]
+        month_start = latest_time - (30 * 86_400_000)
+        candles = [candle for candle in candles if candle["time"] >= month_start]
+        if len(candles) > max_bars:
+            bucket_size = max(1, len(candles) // max_bars)
+            bucketed = []
+            for index in range(0, len(candles), bucket_size):
+                bucket = candles[index : index + bucket_size]
+                if not bucket:
+                    continue
+                bucketed.append(
+                    {
+                        "time": bucket[0]["time"],
+                        "open": bucket[0]["open"],
+                        "high": max(item["high"] for item in bucket),
+                        "low": min(item["low"] for item in bucket),
+                        "close": bucket[-1]["close"],
+                    }
+                )
+            candles = bucketed[-max_bars:]
+        jst = timezone(timedelta(hours=9))
+        return {
+            "candles": [
+                {
+                    "time": datetime.fromtimestamp(candle["time"] / 1000, tz=timezone.utc).astimezone(jst).strftime("%m/%d %H:%M"),
+                    "open": candle["open"],
+                    "high": candle["high"],
+                    "low": candle["low"],
+                    "close": candle["close"],
+                }
+                for candle in candles
+            ],
+            "timeframe": item.get("timeframe") or "",
+            "days": min(int(item.get("days") or 0), 30),
+            "exchange": item.get("exchange_id") or "",
+        }
+
     def _smoothed_relative_score(self, symbol: str, current_score: Decimal, lookback_items: int = 12) -> Decimal:
         scores = [current_score]
         for item in list(self.relative_feature_history)[-lookback_items:]:
@@ -1906,6 +2002,7 @@ class BotRuntime:
             ema_slow = self._ema(series, 21)
             latest_price = series[-1] if series else Decimal("0")
             price_chart = self._price_return_since_jst_9_chart(symbol)
+            candle_chart = self._historical_candles_for_symbol(symbol)
             ema_trend = Decimal("0")
             if ema_fast is not None and ema_slow is not None and ema_slow > 0:
                 ema_trend = ((ema_fast - ema_slow) / ema_slow) * Decimal("100")
@@ -1927,6 +2024,10 @@ class BotRuntime:
                     "volume_since_9jst": self._liquidity_since_jst_9(symbol),
                     "price_return_since_9jst_series": price_chart["values"],
                     "price_return_since_9jst_times": price_chart["times"],
+                    "price_candles": candle_chart["candles"],
+                    "price_candle_timeframe": candle_chart["timeframe"],
+                    "price_candle_days": candle_chart["days"],
+                    "price_candle_exchange": candle_chart["exchange"],
                     "open_interest": None,
                     "funding_rate": None,
                     "liquidation": None,
@@ -1945,6 +2046,7 @@ class BotRuntime:
                 slim = dict(item)
                 slim.pop("price_return_since_9jst_series", None)
                 slim.pop("price_return_since_9jst_times", None)
+                slim.pop("price_candles", None)
                 slim.pop("volume_since_9jst", None)
                 features.append(slim)
         return to_jsonable(

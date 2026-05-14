@@ -216,39 +216,53 @@ function renderRelativeList(target, rows, emptyText) {
       const number = Number(value || 0);
       return `<span class="pct-badge ${number >= 0 ? "positive" : "negative"}">${label} ${number >= 0 ? "+" : ""}${numberText(number, 2)}%</span>`;
     };
-    const priceValues = (item.price_return_since_9jst_series || []).map(Number).filter(Number.isFinite);
-    const chartTimes = item.price_return_since_9jst_times || [];
-    const minReturn = priceValues.length ? Math.min(...priceValues, 0) : -1;
-    const maxReturn = priceValues.length ? Math.max(...priceValues, 0) : 1;
-    const rangeReturn = maxReturn - minReturn || 1;
-    const zeroY = 24 - ((0 - minReturn) / rangeReturn) * 20;
-    const points = priceValues.map((value, index) => {
-      const x = priceValues.length <= 1 ? 0 : (index / (priceValues.length - 1)) * 100;
-      const y = 24 - ((value - minReturn) / rangeReturn) * 20;
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    }).join(" ");
-    const leftTime = chartTimes[0] || "-";
-    const midTime = chartTimes.length ? chartTimes[Math.floor((chartTimes.length - 1) / 2)] : "-";
-    const rightTime = chartTimes.length ? chartTimes[chartTimes.length - 1] : "-";
+    const candles = (item.price_candles || []).map((candle) => ({
+      time: candle.time || "",
+      open: Number(candle.open),
+      high: Number(candle.high),
+      low: Number(candle.low),
+      close: Number(candle.close),
+    })).filter((candle) => [candle.open, candle.high, candle.low, candle.close].every(Number.isFinite));
+    const candlePrices = candles.flatMap((candle) => [candle.open, candle.high, candle.low, candle.close]);
+    const minPrice = candlePrices.length ? Math.min(...candlePrices) : 0;
+    const maxPrice = candlePrices.length ? Math.max(...candlePrices) : 1;
+    const priceRange = maxPrice - minPrice || 1;
+    const candleWidth = candles.length ? Math.max(0.22, Math.min(1.4, 82 / candles.length)) : 0.8;
+    const candleNodes = candles.map((candle, index) => {
+      const x = candles.length <= 1 ? 50 : (index / (candles.length - 1)) * 100;
+      const yHigh = 25 - ((candle.high - minPrice) / priceRange) * 22;
+      const yLow = 25 - ((candle.low - minPrice) / priceRange) * 22;
+      const yOpen = 25 - ((candle.open - minPrice) / priceRange) * 22;
+      const yClose = 25 - ((candle.close - minPrice) / priceRange) * 22;
+      const top = Math.min(yOpen, yClose);
+      const height = Math.max(0.7, Math.abs(yClose - yOpen));
+      const klass = candle.close >= candle.open ? "up" : "down";
+      return `<g class="candle ${klass}"><line x1="${x.toFixed(2)}" y1="${yHigh.toFixed(2)}" x2="${x.toFixed(2)}" y2="${yLow.toFixed(2)}"></line><rect x="${(x - candleWidth / 2).toFixed(2)}" y="${top.toFixed(2)}" width="${candleWidth.toFixed(2)}" height="${height.toFixed(2)}"></rect></g>`;
+    }).join("");
+    const leftTime = candles[0]?.time || "-";
+    const midTime = candles.length ? candles[Math.floor((candles.length - 1) / 2)].time : "-";
+    const rightTime = candles.length ? candles[candles.length - 1].time : "-";
+    const chartLabel = candles.length
+      ? `${numberText(item.price_candle_days, 0) || "?"}? / ${escapeHtml(item.price_candle_timeframe || "?")} / ${escapeHtml(item.price_candle_exchange || "")}`
+      : "???????";
     return `
       <article class="ranking-row relative-row">
         <div>
           <strong>${escapeHtml(item.symbol)}</strong>
           <div class="pct-strip">
-            ${pctBadge("9時", item.return_since_9jst_pct)}
+            ${pctBadge("9?", item.return_since_9jst_pct)}
           </div>
-          <span>Score ${numberText(item.relative_score, 2)} / raw ${numberText(item.raw_relative_score, 2)} / 出来高増 ${numberText(item.volume_growth_pct, 2)}% → ${numberText(item.volume_growth_score_pct, 2)}%</span>
+          <span>Score ${numberText(item.relative_score, 2)} / raw ${numberText(item.raw_relative_score, 2)} / ???? ${numberText(item.volume_growth_pct, 2)}% ? ${numberText(item.volume_growth_score_pct, 2)}%</span>
           <span>RSI ${numberText(item.rsi, 1)} / ATR ${numberText(item.atr_pct, 3)}% / EMA ${numberText(item.ema_trend_pct, 3)}%</span>
         </div>
         <div class="mini-volume-chart ${Number(item.return_since_9jst_pct || 0) >= 0 ? "positive" : "negative"}">
-          <span>2h chart / 9時=0%</span>
-          <svg viewBox="0 0 100 28" preserveAspectRatio="none" aria-label="9時を0%にした価格推移">
-            <line x1="0" y1="${zeroY.toFixed(1)}" x2="100" y2="${zeroY.toFixed(1)}"></line>
-            <polyline points="${points}"></polyline>
+          <span>${chartLabel}</span>
+          <svg class="candlestick-chart" viewBox="0 0 100 28" preserveAspectRatio="none" aria-label="?????????">
+            ${candleNodes}
           </svg>
           <div class="chart-axis">
             <b>${leftTime}</b>
-            <b>0%</b>
+            <b>?? ${numberText(maxPrice, 4)}</b>
             <b>${midTime}</b>
             <b>${rightTime}</b>
           </div>
@@ -616,9 +630,9 @@ historicalCandlesButton?.addEventListener("click", async () => {
     body: JSON.stringify({
       symbols: settings.symbols,
       exchanges: settings.futures_exchanges,
-      timeframe: "1m",
-      days: 7,
-      limit_per_market: 1000,
+      timeframe: "4h",
+      days: 30,
+      limit_per_market: 200,
     }),
   });
   const payload = await response.json();
