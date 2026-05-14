@@ -411,15 +411,28 @@ function renderLearningReport(report) {
   }
   relativeLearningReportEl.className = "ranking-list";
   const factors = (report.factor_summary || []).slice(0, 5);
+  const bestRules = (report.best_exit_rules || []).slice(0, 3);
   relativeLearningReportEl.innerHTML = `
     <article class="score-row learning-row">
       <strong>Win ${numberText(report.win_rate_pct, 1)}%</strong>
       <span>${report.win_count}/${report.trade_count}</span>
       <span>Avg ${numberText(report.avg_pnl_after_cost_pct, 3)}%</span>
+      <span>MFE ${numberText(report.avg_max_favorable_pct, 3)}%</span>
+      <span>MAE ${numberText(report.avg_max_adverse_pct, 3)}%</span>
       <span>${report.horizon_minutes}min</span>
       <span>Cost ${numberText(report.assumed_cost_pct, 3)}%</span>
       <span>Samples ${report.sample_count}</span>
     </article>
+    ${bestRules.map((rule) => `
+      <article class="score-row learning-row">
+        <strong>Exit TP ${numberText(rule.take_profit_pct, 2)} / SL ${numberText(rule.stop_loss_pct, 2)}</strong>
+        <span>Win ${numberText(rule.win_rate_pct, 1)}%</span>
+        <span>Avg ${numberText(rule.avg_pnl_pct, 3)}%</span>
+        <span>TP ${rule.take_profit_count}</span>
+        <span>SL ${rule.stop_loss_count}</span>
+        <span>Time ${rule.time_exit_count}</span>
+      </article>
+    `).join("")}
     ${factors.map((factor) => `
       <article class="score-row learning-row">
         <strong>${escapeHtml(factor.key)}</strong>

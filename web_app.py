@@ -387,6 +387,7 @@ def relative_learning_report(
     def rows_by_symbol(item: dict[str, Any]) -> dict[str, dict[str, Any]]:
         return {str(row.get("symbol")): row for row in item.get("features", []) if row.get("symbol")}
 
+    time_rows = [(item_time(item), rows_by_symbol(item)) for item in snapshots]
     trades: list[dict[str, Any]] = []
     for index, entry in enumerate(snapshots[:-1]):
         entry_time = item_time(entry)
@@ -418,6 +419,36 @@ def relative_learning_report(
         short_exit = row_price(exit_rows[short_symbol])
         if not long_entry or not short_entry or not long_exit or not short_exit:
             continue
+        path = []
+        max_favorable = Decimal("-999")
+        max_adverse = Decimal("999")
+        minutes_to_best: Decimal | None = None
+        minutes_to_take_profit: Decimal | None = None
+        minutes_to_stop_loss: Decimal | None = None
+        for path_time, path_rows in time_rows[index + 1 :]:
+            if path_time is None or path_time > item_time(exit_item):
+                break
+            if long_symbol not in path_rows or short_symbol not in path_rows:
+                continue
+            path_long = row_price(path_rows[long_symbol])
+            path_short = row_price(path_rows[short_symbol])
+            if not path_long or not path_short:
+                continue
+            held = Decimal(str((path_time - entry_time).total_seconds() / 60))
+            long_path_return = ((path_long - long_entry) / long_entry) * Decimal("100")
+            short_path_return = ((path_short - short_entry) / short_entry) * Decimal("100")
+            path_relative = long_path_return - short_path_return
+            path_net = path_relative - assumed_cost_pct
+            path.append({"held_minutes": held, "net_pct": path_net})
+            if path_net > max_favorable:
+                max_favorable = path_net
+                minutes_to_best = held
+            if path_net < max_adverse:
+                max_adverse = path_net
+            if minutes_to_take_profit is None and path_net >= Decimal("0.30"):
+                minutes_to_take_profit = held
+            if minutes_to_stop_loss is None and path_net <= Decimal("-0.30"):
+                minutes_to_stop_loss = held
         long_return = ((long_exit - long_entry) / long_entry) * Decimal("100")
         short_return = ((short_exit - short_entry) / short_entry) * Decimal("100")
         relative_return = long_return - short_return
@@ -434,6 +465,11 @@ def relative_learning_report(
                 "short_return_pct": short_return,
                 "relative_return_pct": relative_return,
                 "pnl_after_cost_pct": pnl_after_cost,
+                "max_favorable_pct": max_favorable if max_favorable != Decimal("-999") else pnl_after_cost,
+                "max_adverse_pct": max_adverse if max_adverse != Decimal("999") else pnl_after_cost,
+                "minutes_to_best": minutes_to_best,
+                "minutes_to_take_profit_030": minutes_to_take_profit,
+                "minutes_to_stop_loss_030": minutes_to_stop_loss,
                 "win": pnl_after_cost > 0,
                 "long_parts": long_row.get("score_parts", {}),
                 "short_parts": short_row.get("score_parts", {}),
@@ -447,6 +483,44 @@ def relative_learning_report(
     losses = [trade for trade in trades if not trade["win"]]
     total = sum((Decimal(str(trade["pnl_after_cost_pct"])) for trade in trades), Decimal("0"))
     average = total / Decimal(str(len(trades)))
+
+    def outcome_for_thresholds(trade: dict[str, Any], take_profit: Decimal, stop_loss: Decimal) -> dict[str, Any]:
+        tp = trade.get("minutes_to_take_profit_030") if take_profit == Decimal("0.30") else None
+        sl = trade.get("minutes_to_stop_loss_030") if stop_loss == Decimal("-0.30") else None
+        if tp is not None and (sl is None or Decimal(str(tp)) <= Decimal(str(sl))):
+            return {"status": "take_profit", "pnl_pct": take_profit, "held_minutes": tp}
+        if sl is not None:
+            return {"status": "stop_loss", "pnl_pct": stop_loss, "held_minutes": sl}
+        return {"status": "time_exit", "pnl_pct": Decimal(str(trade["pnl_after_cost_pct"])), "held_minutes": horizon_minutes}
+
+    threshold_results = []
+    for take_profit in [Decimal("0.20"), Decimal("0.30"), Decimal("0.50"), Decimal("0.80"), Decimal("1.20")]:
+        for stop_loss in [Decimal("-0.20"), Decimal("-0.30"), Decimal("-0.50"), Decimal("-0.80")]:
+            outcomes = []
+            for trade in trades:
+                if take_profit == Decimal("0.30") and stop_loss == Decimal("-0.30"):
+                    outcomes.append(outcome_for_thresholds(trade, take_profit, stop_loss))
+                else:
+                    # Use MFE/MAE approximation when exact first-touch time was not tracked for this threshold.
+                    if Decimal(str(trade["max_adverse_pct"])) <= stop_loss:
+                        outcomes.append({"status": "stop_loss", "pnl_pct": stop_loss, "held_minutes": None})
+                    elif Decimal(str(trade["max_favorable_pct"])) >= take_profit:
+                        outcomes.append({"status": "take_profit", "pnl_pct": take_profit, "held_minutes": None})
+                    else:
+                        outcomes.append({"status": "time_exit", "pnl_pct": Decimal(str(trade["pnl_after_cost_pct"])), "held_minutes": horizon_minutes})
+            pnl_values = [Decimal(str(item["pnl_pct"])) for item in outcomes]
+            threshold_results.append(
+                {
+                    "take_profit_pct": take_profit,
+                    "stop_loss_pct": stop_loss,
+                    "win_rate_pct": (Decimal(str(sum(1 for item in pnl_values if item > 0))) / Decimal(str(len(pnl_values)))) * Decimal("100"),
+                    "avg_pnl_pct": sum(pnl_values) / Decimal(str(len(pnl_values))),
+                    "take_profit_count": sum(1 for item in outcomes if item["status"] == "take_profit"),
+                    "stop_loss_count": sum(1 for item in outcomes if item["status"] == "stop_loss"),
+                    "time_exit_count": sum(1 for item in outcomes if item["status"] == "time_exit"),
+                }
+            )
+    threshold_results.sort(key=lambda item: Decimal(str(item["avg_pnl_pct"])), reverse=True)
 
     def average_part(side: str, key: str, subset: list[dict[str, Any]]) -> Decimal:
         values = []
@@ -483,6 +557,9 @@ def relative_learning_report(
             "loss_count": len(losses),
             "win_rate_pct": (Decimal(str(len(wins))) / Decimal(str(len(trades)))) * Decimal("100"),
             "avg_pnl_after_cost_pct": average,
+            "avg_max_favorable_pct": sum((Decimal(str(trade["max_favorable_pct"])) for trade in trades), Decimal("0")) / Decimal(str(len(trades))),
+            "avg_max_adverse_pct": sum((Decimal(str(trade["max_adverse_pct"])) for trade in trades), Decimal("0")) / Decimal(str(len(trades))),
+            "best_exit_rules": threshold_results[:8],
             "best": max(trades, key=lambda trade: trade["pnl_after_cost_pct"]),
             "worst": min(trades, key=lambda trade: trade["pnl_after_cost_pct"]),
             "recent_trades": trades[-30:],
