@@ -1779,15 +1779,27 @@ class BotRuntime:
             return None
         return ((new - old) / old) * Decimal("100")
 
+    def _liquidity_growth_pct(self, symbol: str, lookback_points: int = 20) -> Decimal | None:
+        points = [
+            item for item in list(self.relative_history)[-lookback_points:]
+            if symbol in item.get("liquidity_quote", {})
+        ]
+        if len(points) < 2:
+            return None
+        old = Decimal(str(points[0]["liquidity_quote"][symbol]))
+        new = Decimal(str(points[-1]["liquidity_quote"][symbol]))
+        if old <= 0:
+            return None
+        return ((new - old) / old) * Decimal("100")
+
     def _score_relative_features(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not rows:
             return []
         max_liquidity = max(Decimal(str(row.get("liquidity_quote") or 0)) for row in rows) or Decimal("1")
         scored = []
         for row in rows:
-            ret_1h = Decimal(str(row.get("return_1h_pct") or 0))
-            ret_4h = Decimal(str(row.get("return_4h_pct") or 0))
-            ret_day = Decimal(str(row.get("return_since_9jst_pct") or 0))
+            volume_growth = Decimal(str(row.get("volume_growth_pct") or 0))
+            volume_growth_capped = max(Decimal("-20"), min(Decimal("20"), volume_growth))
             ema_trend = Decimal(str(row.get("ema_trend_pct") or 0))
             rsi = Decimal(str(row.get("rsi") or 50))
             atr = Decimal(str(row.get("atr_pct") or 0))
@@ -1797,9 +1809,7 @@ class BotRuntime:
             rsi_score = (rsi - Decimal("50")) / Decimal("5")
             atr_penalty = min(Decimal("8"), atr * Decimal("1.5"))
             score = (
-                ret_1h * Decimal("3.0")
-                + ret_4h * Decimal("1.5")
-                + ret_day * Decimal("1.0")
+                volume_growth_capped * Decimal("0.12")
                 + ema_trend * Decimal("2.0")
                 + rsi_score
                 + liquidity_score
@@ -1807,7 +1817,8 @@ class BotRuntime:
                 - thin_penalty
             )
             row["relative_score"] = score
-            row["score_note"] = "1h/4h/9時から/EMA/RSI/ATR/板厚"
+            row["volume_growth_score_pct"] = volume_growth_capped
+            row["score_note"] = "出来高増加/EMA/RSI/ATR/板厚"
             scored.append(row)
         return sorted(scored, key=lambda item: Decimal(str(item["relative_score"])), reverse=True)
 
@@ -1839,6 +1850,8 @@ class BotRuntime:
                     "atr_pct": self._atr_pct(series),
                     "vwap": latest_price,
                     "liquidity_quote": (latest.get("liquidity_quote") or {}).get(symbol, 0),
+                    "volume_growth_pct": self._liquidity_growth_pct(symbol),
+                    "volume_source": "orderbook_liquidity_proxy",
                     "open_interest": None,
                     "funding_rate": None,
                     "liquidation": None,
