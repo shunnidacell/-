@@ -1911,12 +1911,24 @@ class BotRuntime:
                 }
             )
         combined = self._score_relative_features(combined)
+        strong = combined[:12]
+        weak = list(reversed(combined[-12:]))
+        visible_symbols = {item["symbol"] for item in strong + weak}
+        features = []
+        for item in combined:
+            if item["symbol"] in visible_symbols:
+                features.append(item)
+            else:
+                slim = dict(item)
+                slim.pop("price_return_since_9jst_series", None)
+                slim.pop("volume_since_9jst", None)
+                features.append(slim)
         return to_jsonable(
             {
                 "updated_at": datetime.now(timezone.utc),
-                "strong": combined[:12],
-                "weak": list(reversed(combined[-12:])),
-                "features": combined,
+                "strong": strong,
+                "weak": weak,
+                "features": features,
             }
         )
 
@@ -2334,7 +2346,7 @@ class BotRuntime:
             "futures_boost_symbols": sorted(self.futures_boost_symbols.keys()),
             "futures_movement_symbols": to_jsonable(self.futures_movement_symbols),
             "relative_rankings": self.relative_rankings,
-            "relative_feature_history": list(self.relative_feature_history),
+            "relative_feature_history_count": len(self.relative_feature_history),
             "relative_positions": to_jsonable(list(self.relative_positions.values())),
             "relative_closed_trades": list(self.relative_closed_trades),
             "relative_pnl": to_jsonable(

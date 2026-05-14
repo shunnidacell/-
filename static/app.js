@@ -624,4 +624,4 @@ historicalCandlesButton?.addEventListener("click", async () => {
 
 loadState();
 loadHistory();
-setInterval(loadState, 1500);
+setInterval(loadState, 3000);
