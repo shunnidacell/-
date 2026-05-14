@@ -23,6 +23,9 @@ const historyRefreshButton = document.querySelector("#history-refresh-button");
 const historyAppLogEl = document.querySelector("#history-app-log");
 const historyTradesEl = document.querySelector("#history-trades");
 const historyFuturesPaperEl = document.querySelector("#history-futures-paper");
+const demoArbHistoryButton = document.querySelector("#demo-arb-history-button");
+const demoArbHistoryModal = document.querySelector("#demo-arb-history-modal");
+const demoArbHistoryClose = document.querySelector("#demo-arb-history-close");
 const historyFilesEl = document.querySelector("#history-files");
 const historicalCandlesButton = document.querySelector("#historical-candles-button");
 const historicalCandlesStatusEl = document.querySelector("#historical-candles-status");
@@ -550,6 +553,21 @@ relativePositionsEl?.addEventListener("click", async (event) => {
 });
 
 historyRefreshButton.addEventListener("click", loadHistory);
+
+demoArbHistoryButton?.addEventListener("click", async () => {
+  demoArbHistoryModal?.classList.remove("hidden");
+  await loadHistory();
+});
+
+demoArbHistoryClose?.addEventListener("click", () => {
+  demoArbHistoryModal?.classList.add("hidden");
+});
+
+demoArbHistoryModal?.addEventListener("click", (event) => {
+  if (event.target === demoArbHistoryModal) {
+    demoArbHistoryModal.classList.add("hidden");
+  }
+});
 
 historicalCandlesButton?.addEventListener("click", async () => {
   historicalCandlesButton.disabled = true;

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Futures Spread Research</title>
-    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/styles.css?v=demo-history-modal" />
   </head>
   <body>
     <header class="app-header">
@@ -168,7 +168,7 @@
           <section class="panel">
             <div class="section-title">
               <h2>建玉</h2>
-              <span>紙トレード</span>
+              <button type="button" id="demo-arb-history-button">デモ履歴を見る</button>
             </div>
             <div id="futures-positions" class="ranking-list empty">現在の建玉はありません</div>
           </section>
@@ -322,26 +322,6 @@
                 </table>
               </div>
             </div>
-            <div>
-              <div class="subhead">増やしたデモ取引</div>
-              <div class="table-wrap history-table">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>時刻</th>
-                      <th>動作</th>
-                      <th>銘柄</th>
-                      <th>方向</th>
-                      <th>金額</th>
-                      <th>Net</th>
-                      <th>Cost</th>
-                      <th>損益</th>
-                    </tr>
-                  </thead>
-                  <tbody id="history-futures-paper"></tbody>
-                </table>
-              </div>
-            </div>
           </div>
           <div id="history-files" class="file-hint"></div>
         </section>
@@ -363,6 +343,32 @@
       <label id="live-confirm-row"></label>
     </div>
 
-    <script src="/static/app.js"></script>
+    <div id="demo-arb-history-modal" class="modal-backdrop hidden">
+      <section class="modal-panel">
+        <div class="section-title">
+          <h2>デモアビトラ履歴</h2>
+          <button type="button" id="demo-arb-history-close">閉じる</button>
+        </div>
+        <div class="table-wrap history-table">
+          <table>
+            <thead>
+              <tr>
+                <th>時刻</th>
+                <th>動作</th>
+                <th>銘柄</th>
+                <th>方向</th>
+                <th>金額</th>
+                <th>Net</th>
+                <th>Cost</th>
+                <th>損益</th>
+              </tr>
+            </thead>
+            <tbody id="history-futures-paper"></tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <script src="/static/app.js?v=demo-history-modal"></script>
   </body>
 </html>
