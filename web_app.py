@@ -95,6 +95,7 @@ class FuturesPaperPosition(BaseModel):
 
 class RelativeTradeRequest(BaseModel):
     symbol: str = Field(default="")
+    short_symbols: list[str] = Field(default_factory=list)
     mode: str = Field(default="manual")
     quote_amount: float = Field(default=10, gt=0)
 
@@ -1456,13 +1457,18 @@ class BotRuntime:
             long_symbol = strong[0]["symbol"]
         if "/" not in long_symbol:
             long_symbol = f"{long_symbol}/USDT"
-        basket = self._select_relative_short_basket(long_symbol)
-        if not basket:
-            raise HTTPException(status_code=400, detail="short basket is not ready yet")
         latest_mids = self.relative_history[-1]["mids"] if self.relative_history else {}
         if long_symbol not in latest_mids:
             raise HTTPException(status_code=400, detail=f"{long_symbol} price is not ready")
-        short_symbols = [item["symbol"] for item in basket if item["symbol"] in latest_mids]
+        requested_shorts = [symbol.strip().upper() for symbol in request.short_symbols if symbol.strip()]
+        requested_shorts = [symbol if "/" in symbol else f"{symbol}/USDT" for symbol in requested_shorts]
+        if request.mode == "manual" and requested_shorts:
+            short_symbols = [symbol for symbol in requested_shorts if symbol != long_symbol and symbol in latest_mids]
+        else:
+            basket = self._select_relative_short_basket(long_symbol)
+            if not basket:
+                raise HTTPException(status_code=400, detail="short basket is not ready yet")
+            short_symbols = [item["symbol"] for item in basket if item["symbol"] in latest_mids]
         if not short_symbols:
             raise HTTPException(status_code=400, detail="short basket prices are not ready")
         key = f"{long_symbol}|{','.join(short_symbols)}"

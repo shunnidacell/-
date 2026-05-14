@@ -470,7 +470,7 @@ select:focus {
 
 .relative-controls {
   display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(120px, 0.7fr) auto auto;
+  grid-template-columns: minmax(180px, 1fr) minmax(220px, 1.3fr) minmax(120px, 0.6fr) auto auto;
   gap: 12px;
   align-items: end;
   margin-bottom: 16px;
@@ -478,6 +478,10 @@ select:focus {
 
 .relative-controls label {
   margin-bottom: 0;
+}
+
+#relative-short-symbols {
+  min-height: 112px;
 }
 
 .compact-grid {

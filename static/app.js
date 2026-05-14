@@ -33,6 +33,7 @@ const loadBarFillEl = document.querySelector("#load-bar-fill");
 const activeSymbolsEl = document.querySelector("#active-symbols");
 const activeSymbolsMetaEl = document.querySelector("#active-symbols-meta");
 const relativeSymbolEl = document.querySelector("#relative-symbol");
+const relativeShortSymbolsEl = document.querySelector("#relative-short-symbols");
 const relativeAmountEl = document.querySelector("#relative-amount");
 const relativeOpenManualButton = document.querySelector("#relative-open-manual");
 const relativeOpenAutoButton = document.querySelector("#relative-open-auto");
@@ -42,6 +43,7 @@ const relativePositionsEl = document.querySelector("#relative-positions");
 const relativeTradesEl = document.querySelector("#relative-trades");
 
 let settingsApplied = false;
+let relativeSelectionTouched = false;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -277,6 +279,38 @@ function renderActiveSymbols(state, perf) {
   activeSymbolsEl.innerHTML = symbols.map((symbol) => `<span class="symbol-chip">${escapeHtml(symbol)}</span>`).join("");
 }
 
+function optionHtml(symbol, label = symbol) {
+  return `<option value="${escapeHtml(symbol)}">${escapeHtml(label)}</option>`;
+}
+
+function selectedOptions(selectEl) {
+  if (!selectEl) return [];
+  return Array.from(selectEl.selectedOptions || []).map((option) => option.value);
+}
+
+function renderRelativeSelectors(state) {
+  if (!relativeSymbolEl || !relativeShortSymbolsEl || relativeSelectionTouched) return;
+  const strong = state.relative_rankings?.strong || [];
+  const weak = state.relative_rankings?.weak || [];
+  const active = state.futures_active_symbols || [];
+  const strongSymbols = [...new Set([...strong.map((item) => item.symbol), ...active])].filter(Boolean);
+  const weakSymbols = [...new Set([...weak.map((item) => item.symbol), ...active])].filter(Boolean);
+  if (strongSymbols.length) {
+    relativeSymbolEl.innerHTML = strongSymbols.map((symbol) => {
+      const row = strong.find((item) => item.symbol === symbol);
+      const label = row ? `${symbol}  1h ${numberText(row.return_1h_pct)}%` : symbol;
+      return optionHtml(symbol, label);
+    }).join("");
+  }
+  if (weakSymbols.length) {
+    relativeShortSymbolsEl.innerHTML = weakSymbols.map((symbol, index) => {
+      const row = weak.find((item) => item.symbol === symbol);
+      const label = row ? `${symbol}  1h ${numberText(row.return_1h_pct)}%` : symbol;
+      return `<option value="${escapeHtml(symbol)}" ${index < 4 ? "selected" : ""}>${escapeHtml(label)}</option>`;
+    }).join("");
+  }
+}
+
 function renderState(state) {
   const marketStatuses = state.market_statuses || [];
   const latestFutures = (state.futures_spread_history || []).at(-1);
@@ -330,6 +364,7 @@ function renderState(state) {
   }
 
   renderActiveSymbols(state, perf);
+  renderRelativeSelectors(state);
 
   marketsEl.innerHTML = marketStatuses.map((item) => `
     <tr>
@@ -444,6 +479,7 @@ resetDemoButton.addEventListener("click", async () => {
 relativeOpenManualButton?.addEventListener("click", async () => {
   const state = await postJson("/api/relative/open", {
     symbol: relativeSymbolEl.value,
+    short_symbols: selectedOptions(relativeShortSymbolsEl),
     mode: "manual",
     quote_amount: Number(relativeAmountEl.value || 10),
   });
@@ -453,10 +489,19 @@ relativeOpenManualButton?.addEventListener("click", async () => {
 relativeOpenAutoButton?.addEventListener("click", async () => {
   const state = await postJson("/api/relative/open", {
     symbol: "",
+    short_symbols: [],
     mode: "auto",
     quote_amount: Number(relativeAmountEl.value || 10),
   });
   if (state) renderState(state);
+});
+
+relativeSymbolEl?.addEventListener("change", () => {
+  relativeSelectionTouched = true;
+});
+
+relativeShortSymbolsEl?.addEventListener("change", () => {
+  relativeSelectionTouched = true;
 });
 
 relativePositionsEl?.addEventListener("click", async (event) => {
