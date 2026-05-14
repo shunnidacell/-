@@ -211,17 +211,42 @@ function renderRelativeList(target, rows, emptyText) {
     return;
   }
   target.className = "ranking-list";
-  target.innerHTML = items.map((item) => `
-    <article class="ranking-row">
-      <div>
-        <strong>${escapeHtml(item.symbol)}</strong>
-        <span>Score ${numberText(item.relative_score, 2)} / raw ${numberText(item.raw_relative_score, 2)} / 出来高増 ${numberText(item.volume_growth_pct, 2)}% → ${numberText(item.volume_growth_score_pct, 2)}%</span>
-        <span>1h ${numberText(item.return_1h_pct)}% / 4h ${numberText(item.return_4h_pct)}%</span>
-        <span>9時 ${numberText(item.return_since_9jst_pct)}% / RSI ${numberText(item.rsi, 1)} / ATR ${numberText(item.atr_pct, 3)}% / EMA ${numberText(item.ema_trend_pct, 3)}%</span>
-      </div>
-      <div class="rank-net ${Number(item.relative_score) >= 0 ? "positive" : "negative"}">${numberText(item.relative_score, 2)}pt</div>
-    </article>
-  `).join("");
+  target.innerHTML = items.map((item) => {
+    const pctBadge = (label, value) => {
+      const number = Number(value || 0);
+      return `<span class="pct-badge ${number >= 0 ? "positive" : "negative"}">${label} ${number >= 0 ? "+" : ""}${numberText(number, 2)}%</span>`;
+    };
+    const volumeValues = (item.volume_since_9jst || []).map(Number).filter(Number.isFinite);
+    const minVolume = volumeValues.length ? Math.min(...volumeValues) : 0;
+    const maxVolume = volumeValues.length ? Math.max(...volumeValues) : 0;
+    const rangeVolume = maxVolume - minVolume || 1;
+    const points = volumeValues.map((value, index) => {
+      const x = volumeValues.length <= 1 ? 0 : (index / (volumeValues.length - 1)) * 100;
+      const y = 24 - ((value - minVolume) / rangeVolume) * 20;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(" ");
+    return `
+      <article class="ranking-row relative-row">
+        <div>
+          <strong>${escapeHtml(item.symbol)}</strong>
+          <div class="pct-strip">
+            ${pctBadge("9時", item.return_since_9jst_pct)}
+            ${pctBadge("1h", item.return_1h_pct)}
+            ${pctBadge("4h", item.return_4h_pct)}
+          </div>
+          <span>Score ${numberText(item.relative_score, 2)} / raw ${numberText(item.raw_relative_score, 2)} / 出来高増 ${numberText(item.volume_growth_pct, 2)}% → ${numberText(item.volume_growth_score_pct, 2)}%</span>
+          <span>RSI ${numberText(item.rsi, 1)} / ATR ${numberText(item.atr_pct, 3)}% / EMA ${numberText(item.ema_trend_pct, 3)}%</span>
+        </div>
+        <div class="mini-volume-chart ${Number(item.volume_growth_score_pct || 0) >= 0 ? "positive" : "negative"}">
+          <svg viewBox="0 0 100 28" preserveAspectRatio="none" aria-label="9時からの出来高推移">
+            <line x1="0" y1="24" x2="100" y2="24"></line>
+            <polyline points="${points}"></polyline>
+          </svg>
+        </div>
+        <div class="rank-net ${Number(item.relative_score) >= 0 ? "positive" : "negative"}">${numberText(item.relative_score, 2)}pt</div>
+      </article>
+    `;
+  }).join("");
 }
 
 function renderRelativePositions(positions) {

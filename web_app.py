@@ -1792,6 +1792,22 @@ class BotRuntime:
             return None
         return ((new - old) / old) * Decimal("100")
 
+    def _liquidity_since_jst_9(self, symbol: str) -> list[Decimal]:
+        if not self.relative_history:
+            return []
+        latest_time = datetime.fromisoformat(self.relative_history[-1]["timestamp"])
+        jst = timezone(timedelta(hours=9))
+        latest_jst = latest_time.astimezone(jst)
+        start_jst = latest_jst.replace(hour=9, minute=0, second=0, microsecond=0)
+        if latest_jst < start_jst:
+            start_jst -= timedelta(days=1)
+        values = []
+        for item in self.relative_history:
+            item_time = datetime.fromisoformat(item["timestamp"]).astimezone(jst)
+            if item_time >= start_jst and symbol in item.get("liquidity_quote", {}):
+                values.append(Decimal(str(item["liquidity_quote"][symbol])))
+        return values[-60:]
+
     def _smoothed_relative_score(self, symbol: str, current_score: Decimal, lookback_items: int = 12) -> Decimal:
         scores = [current_score]
         for item in list(self.relative_feature_history)[-lookback_items:]:
@@ -1863,6 +1879,7 @@ class BotRuntime:
                     "liquidity_quote": (latest.get("liquidity_quote") or {}).get(symbol, 0),
                     "volume_growth_pct": self._liquidity_growth_pct(symbol),
                     "volume_source": "orderbook_liquidity_proxy",
+                    "volume_since_9jst": self._liquidity_since_jst_9(symbol),
                     "open_interest": None,
                     "funding_rate": None,
                     "liquidation": None,

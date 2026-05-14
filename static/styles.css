@@ -648,6 +648,10 @@ select:focus {
   background: var(--surface-soft);
 }
 
+.ranking-row.relative-row {
+  grid-template-columns: minmax(0, 1.45fr) minmax(120px, 0.75fr) 92px;
+}
+
 .ranking-row.positive-rank {
   border-color: var(--accent);
   background: var(--good-bg);
@@ -662,6 +666,52 @@ select:focus {
   color: var(--muted);
   font-size: 12px;
   font-weight: 700;
+}
+
+.pct-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0;
+}
+
+.pct-badge {
+  display: inline-flex;
+  width: fit-content;
+  padding: 3px 7px;
+  border-radius: 8px;
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.mini-volume-chart {
+  min-width: 120px;
+}
+
+.mini-volume-chart svg {
+  width: 100%;
+  height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.mini-volume-chart line {
+  stroke: var(--line-strong);
+  stroke-width: 1;
+}
+
+.mini-volume-chart polyline {
+  fill: none;
+  stroke: var(--accent);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.5;
+}
+
+.mini-volume-chart.negative polyline {
+  stroke: var(--danger);
 }
 
 .rank-net {
