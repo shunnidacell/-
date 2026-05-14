@@ -2672,14 +2672,15 @@ class BotRuntime:
         relative_start_cash = Decimal(os.getenv("RELATIVE_PAPER_START_CASH", "10000"))
         futures_total = self.futures_realized_profit + self.futures_unrealized_profit
         relative_total = self.relative_realized_profit + self.relative_unrealized_profit
+        relative_rankings = self._state_relative_rankings()
         return {
             "running": running,
             "settings": self.settings.model_dump(),
             "quotes": self.quotes,
             "market_statuses": self.market_statuses,
             "opportunities": self.opportunities,
-            "spread_history": list(self.spread_history),
-            "futures_spread_history": list(self.futures_spread_history),
+            "spread_history": list(self.spread_history)[-20:],
+            "futures_spread_history": list(self.futures_spread_history)[-3:],
             "futures_market_statuses": self.futures_market_statuses,
             "logs": list(self.logs),
             "last_error": self.last_error,
@@ -2712,7 +2713,7 @@ class BotRuntime:
             "futures_active_symbols": self.futures_active_symbols,
             "futures_boost_symbols": sorted(self.futures_boost_symbols.keys()),
             "futures_movement_symbols": to_jsonable(self.futures_movement_symbols),
-            "relative_rankings": self.relative_rankings,
+            "relative_rankings": relative_rankings,
             "relative_feature_history_count": len(self.relative_feature_history),
             "relative_positions": to_jsonable(list(self.relative_positions.values())),
             "relative_closed_trades": list(self.relative_closed_trades),
@@ -2738,6 +2739,23 @@ class BotRuntime:
             "preflight_results": self.preflight_results,
             "live_ready": os.getenv("LIVE_TRADING", "false").strip().lower() == "true",
             "live_confirm_text": LIVE_CONFIRM_TEXT,
+        }
+
+    def _state_relative_rankings(self) -> dict[str, Any]:
+        def slim_row(row: dict[str, Any]) -> dict[str, Any]:
+            item = dict(row)
+            item.pop("price_candles", None)
+            item.pop("volume_since_9jst", None)
+            return item
+
+        rankings = self.relative_rankings or {}
+        return {
+            "updated_at": rankings.get("updated_at"),
+            "strong": [slim_row(row) for row in rankings.get("strong", [])],
+            "weak": [slim_row(row) for row in rankings.get("weak", [])],
+            "long_candidates": [slim_row(row) for row in rankings.get("long_candidates", [])],
+            "short_candidates": [slim_row(row) for row in rankings.get("short_candidates", [])],
+            "features": [slim_row(row) for row in rankings.get("features", [])],
         }
 
 
