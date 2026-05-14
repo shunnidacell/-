@@ -2877,7 +2877,7 @@ class BotRuntime:
             raise HTTPException(status_code=400, detail=f"{long_symbol} price is not ready")
         requested_shorts = [symbol.strip().upper() for symbol in request.short_symbols if symbol.strip()]
         requested_shorts = [symbol if "/" in symbol else f"{symbol}/USDT" for symbol in requested_shorts]
-        if request.mode == "manual" and requested_shorts:
+        if requested_shorts:
             short_symbols = [symbol for symbol in requested_shorts if symbol != long_symbol and symbol in latest_mids]
         else:
             basket = self._select_relative_short_basket(long_symbol)
@@ -2952,19 +2952,42 @@ class BotRuntime:
         self.log("relative", f"REL PAPER {status} {position['long_symbol']}: pnl {profit:.4f}")
 
     def _update_relative_auto_strategy(self) -> None:
-        if self.relative_positions or len(self.relative_history) < 2:
+        if len(self.relative_history) < 2:
             return
         strong = self.relative_rankings.get("strong", [])
         weak = self.relative_rankings.get("weak", [])
-        if not strong or len(weak) < 3:
+        basket_size = int(os.getenv("RELATIVE_AUTO_BASKET_SIZE", "5"))
+        auto_positions = [position for position in self.relative_positions.values() if position.get("mode") == "auto_top_bottom"]
+        if len(auto_positions) >= basket_size:
             return
-        leader = strong[0]
-        weak_avg = sum(Decimal(str(item["return_1h_pct"])) for item in weak[:4]) / Decimal("4")
-        leader_ret = Decimal(str(leader["return_1h_pct"]))
-        trigger = Decimal(os.getenv("RELATIVE_AUTO_EDGE_PCT", "3.0"))
-        if leader_ret - weak_avg >= trigger:
+        existing_auto_longs = {position.get("long_symbol") for position in auto_positions}
+        if len(strong) < basket_size or len(weak) < basket_size:
+            return
+        latest_mids = self.relative_history[-1]["mids"] if self.relative_history else {}
+        long_symbols = [item["symbol"] for item in strong[:basket_size] if item.get("symbol") in latest_mids]
+        short_symbols = [item["symbol"] for item in weak[:basket_size] if item.get("symbol") in latest_mids]
+        if len(long_symbols) < basket_size or len(short_symbols) < basket_size:
+            return
+        total_quote = Decimal(os.getenv("RELATIVE_PAPER_QUOTE", "10"))
+        per_long_quote = total_quote / Decimal(str(basket_size))
+        for long_symbol in long_symbols:
+            if len([position for position in self.relative_positions.values() if position.get("mode") == "auto_top_bottom"]) >= basket_size:
+                break
+            if long_symbol in short_symbols:
+                continue
+            if long_symbol in existing_auto_longs:
+                continue
+            key = f"{long_symbol}|{','.join(short_symbols)}"
+            if key in self.relative_positions:
+                continue
             self.open_relative_position(
-                RelativeTradeRequest(symbol=leader["symbol"], mode="auto", quote_amount=float(os.getenv("RELATIVE_PAPER_QUOTE", "10")))
+                RelativeTradeRequest(
+                    symbol=long_symbol,
+                    short_symbols=short_symbols,
+                    mode="auto_top_bottom",
+                    quote_amount=float(per_long_quote),
+                ),
+                latest_mids=latest_mids,
             )
 
     def _refresh_relative_pnl(self, close_on_threshold: bool = True) -> None:
