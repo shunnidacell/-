@@ -2186,15 +2186,15 @@ class BotRuntime:
             ) / Decimal("2")
             price_surge_penalty = surge_1h_penalty + surge_4h_penalty + rsi_extreme_penalty + vwap_divergence_penalty
             cap = lambda value, limit: max(-limit, min(limit, value))
-            depth_pressure = cap((bid_depth_1h - ask_depth_1h) / Decimal("10"), Decimal("4")) * Decimal("1.5")
-            depth_pressure += cap((bid_depth_4h - ask_depth_4h) / Decimal("10"), Decimal("4")) * Decimal("1")
+            depth_pressure = cap((bid_depth_1h - ask_depth_1h) / Decimal("10"), Decimal("2")) * Decimal("1.2")
+            depth_pressure += cap((bid_depth_4h - ask_depth_4h) / Decimal("10"), Decimal("2")) * Decimal("0.8")
             score_parts = {
                 "15m_return": cap(return_15m, Decimal("5")) * Decimal("0.5"),
                 "1h_return_rank": cap(return_1h_score, Decimal("1")) * Decimal("0.75"),
                 "4h_return_rank": cap(return_4h_score, Decimal("1")) * Decimal("1"),
-                "15m_volume": cap(volume_15m / Decimal("10"), Decimal("5")) * Decimal("1"),
-                "1h_volume": cap(volume_1h / Decimal("10"), Decimal("5")) * Decimal("2"),
-                "4h_volume": cap(volume_4h / Decimal("10"), Decimal("5")) * Decimal("1.5"),
+                "15m_volume": cap(volume_15m / Decimal("10"), Decimal("4")) * Decimal("0.5"),
+                "1h_volume": cap(volume_1h / Decimal("10"), Decimal("5")) * Decimal("0.8"),
+                "4h_volume": cap(volume_4h / Decimal("10"), Decimal("5")) * Decimal("0.6"),
                 "15m_oi": cap(oi_15m / Decimal("10"), Decimal("5")) * Decimal("1"),
                 "1h_oi": cap(oi_1h / Decimal("10"), Decimal("5")) * Decimal("2"),
                 "4h_oi": cap(oi_4h / Decimal("10"), Decimal("5")) * Decimal("2"),
