@@ -480,10 +480,6 @@ select:focus {
   margin-bottom: 0;
 }
 
-#relative-short-symbols {
-  min-height: 112px;
-}
-
 .compact-grid {
   margin-bottom: 16px;
 }

@@ -285,7 +285,7 @@ function optionHtml(symbol, label = symbol) {
 
 function selectedOptions(selectEl) {
   if (!selectEl) return [];
-  return Array.from(selectEl.selectedOptions || []).map((option) => option.value);
+  return selectEl.value ? [selectEl.value] : [];
 }
 
 function renderRelativeSelectors(state) {
@@ -306,7 +306,7 @@ function renderRelativeSelectors(state) {
     relativeShortSymbolsEl.innerHTML = weakSymbols.map((symbol, index) => {
       const row = weak.find((item) => item.symbol === symbol);
       const label = row ? `${symbol}  1h ${numberText(row.return_1h_pct)}%` : symbol;
-      return `<option value="${escapeHtml(symbol)}" ${index < 4 ? "selected" : ""}>${escapeHtml(label)}</option>`;
+      return `<option value="${escapeHtml(symbol)}" ${index === 0 ? "selected" : ""}>${escapeHtml(label)}</option>`;
     }).join("");
   }
 }
