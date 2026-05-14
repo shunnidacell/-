@@ -23,6 +23,8 @@ const historyRefreshButton = document.querySelector("#history-refresh-button");
 const historyAppLogEl = document.querySelector("#history-app-log");
 const historyTradesEl = document.querySelector("#history-trades");
 const historyFilesEl = document.querySelector("#history-files");
+const historicalCandlesButton = document.querySelector("#historical-candles-button");
+const historicalCandlesStatusEl = document.querySelector("#historical-candles-status");
 const eventReportEl = document.querySelector("#event-report");
 const scanDurationEl = document.querySelector("#scan-duration");
 const scanRequestsEl = document.querySelector("#scan-requests");
@@ -388,6 +390,12 @@ function renderState(state) {
   renderRelativePositions(state.relative_positions || []);
 
   renderRelativeTrades(state.relative_closed_trades || []);
+  const candleStatus = state.historical_candle_status || {};
+  if (historicalCandlesStatusEl && candleStatus.status) {
+    historicalCandlesStatusEl.textContent = candleStatus.status === "running"
+      ? `読込中 ${candleStatus.markets || ""}市場`
+      : `保存済み ${candleStatus.candle_count || 0}本 / ${candleStatus.ok_count || 0}市場`;
+  }
 
   tradesEl.innerHTML = (state.trades || []).map((trade) => `
     <tr>
@@ -514,6 +522,31 @@ relativePositionsEl?.addEventListener("click", async (event) => {
 });
 
 historyRefreshButton.addEventListener("click", loadHistory);
+
+historicalCandlesButton?.addEventListener("click", async () => {
+  historicalCandlesButton.disabled = true;
+  historicalCandlesStatusEl.textContent = "過去チャート読込中...";
+  const settings = settingsFromForm();
+  const response = await fetch("/api/historical-candles/backfill", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      symbols: settings.symbols,
+      exchanges: settings.futures_exchanges,
+      timeframe: "1h",
+      days: 180,
+      limit_per_market: 1000,
+    }),
+  });
+  const payload = await response.json();
+  historicalCandlesButton.disabled = false;
+  if (!response.ok) {
+    historicalCandlesStatusEl.textContent = payload.detail || "読込失敗";
+    return;
+  }
+  historicalCandlesStatusEl.textContent = `保存済み ${payload.candle_count || 0}本 / ${payload.ok_count || 0}市場`;
+  await loadHistory();
+});
 
 loadState();
 loadHistory();

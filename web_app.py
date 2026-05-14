@@ -40,6 +40,7 @@ APP_LOG_PATH = LOG_DIR / "app.log"
 TRADE_LOG_PATH = LOG_DIR / "trades.jsonl"
 SPREAD_LOG_PATH = LOG_DIR / "spread_history.jsonl"
 FUTURES_SPREAD_LOG_PATH = LOG_DIR / "futures_spread_history.jsonl"
+HISTORICAL_CANDLE_LOG_PATH = LOG_DIR / "historical_candles.jsonl"
 LIVE_CONFIRM_TEXT = "I_UNDERSTAND_REAL_ORDERS"
 
 load_dotenv(ROOT / ".env")
@@ -98,6 +99,14 @@ class RelativeTradeRequest(BaseModel):
     short_symbols: list[str] = Field(default_factory=list)
     mode: str = Field(default="manual")
     quote_amount: float = Field(default=10, gt=0)
+
+
+class HistoricalCandlesRequest(BaseModel):
+    symbols: str = Field(default="")
+    exchanges: str = Field(default="")
+    timeframe: str = Field(default="1h")
+    days: int = Field(default=180, ge=1, le=730)
+    limit_per_market: int = Field(default=1000, ge=50, le=1500)
 
 
 def parse_csv(value: str) -> list[str]:
@@ -528,6 +537,7 @@ class BotRuntime:
         self.relative_closed_trades: deque[dict[str, Any]] = deque(maxlen=200)
         self.relative_realized_profit = Decimal("0")
         self.relative_unrealized_profit = Decimal("0")
+        self.historical_candle_status: dict[str, Any] = {}
         self.demo = DemoBroker()
         self.settings = load_saved_settings() or config_to_settings(load_config())
         self.last_error: str | None = None
@@ -1123,6 +1133,142 @@ class BotRuntime:
             asks = [[level.get("px"), level.get("sz")] for level in levels[1][:limit]]
             return {"bids": bids, "asks": asks}
         return {"bids": data.get("bids", []), "asks": data.get("asks", [])}
+
+    def _timeframe_ms(self, timeframe: str) -> int:
+        units = {"m": 60_000, "h": 3_600_000, "d": 86_400_000}
+        value = timeframe.strip().lower()
+        if len(value) < 2 or value[-1] not in units:
+            raise HTTPException(status_code=400, detail="timeframe must be like 1m, 5m, 1h, 1d")
+        return int(value[:-1]) * units[value[-1]]
+
+    async def backfill_historical_candles(self, request: HistoricalCandlesRequest) -> dict[str, Any]:
+        symbols = [symbol.upper() for symbol in parse_csv(request.symbols or self.settings.symbols)]
+        exchanges = [exchange.lower() for exchange in parse_csv(request.exchanges or self.settings.futures_exchanges)]
+        if not symbols or not exchanges:
+            raise HTTPException(status_code=400, detail="symbols and exchanges are required")
+        timeframe_ms = self._timeframe_ms(request.timeframe)
+        end_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        start_ms = end_ms - (request.days * 86_400_000)
+        wanted_limit = min(request.limit_per_market, max(50, int((end_ms - start_ms) / timeframe_ms)))
+        results = []
+        total_candles = 0
+        started = datetime.now(timezone.utc)
+        self.historical_candle_status = {
+            "status": "running",
+            "started_at": started,
+            "timeframe": request.timeframe,
+            "days": request.days,
+            "markets": len(symbols) * len(exchanges),
+        }
+        for exchange_id in exchanges:
+            for symbol in symbols:
+                try:
+                    candles = await self._fetch_futures_candles(exchange_id, symbol, request.timeframe, start_ms, end_ms, wanted_limit)
+                    total_candles += len(candles)
+                    item = {
+                        "timestamp": datetime.now(timezone.utc),
+                        "exchange_id": exchange_id,
+                        "symbol": symbol,
+                        "timeframe": request.timeframe,
+                        "days": request.days,
+                        "count": len(candles),
+                        "candles": candles,
+                    }
+                    append_jsonl(HISTORICAL_CANDLE_LOG_PATH, item)
+                    results.append({"exchange_id": exchange_id, "symbol": symbol, "status": "ok", "count": len(candles)})
+                except Exception as exc:
+                    results.append({"exchange_id": exchange_id, "symbol": symbol, "status": "error", "message": f"{type(exc).__name__}: {exc}"})
+        ok_count = sum(1 for item in results if item["status"] == "ok")
+        error_count = len(results) - ok_count
+        self.historical_candle_status = {
+            "status": "done",
+            "started_at": started,
+            "finished_at": datetime.now(timezone.utc),
+            "timeframe": request.timeframe,
+            "days": request.days,
+            "market_count": len(results),
+            "ok_count": ok_count,
+            "error_count": error_count,
+            "candle_count": total_candles,
+            "results": results[-80:],
+            "file": str(HISTORICAL_CANDLE_LOG_PATH),
+        }
+        self.log("history", f"Historical candles saved: {total_candles} candles / {ok_count} markets")
+        return to_jsonable(self.historical_candle_status)
+
+    async def _fetch_futures_candles(
+        self,
+        exchange_id: str,
+        symbol: str,
+        timeframe: str,
+        start_ms: int,
+        end_ms: int,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        compact = symbol.replace("/", "").replace("-", "").upper()
+        headers = {"User-Agent": "arb-bot/1.0"}
+        connector = aiohttp.TCPConnector(resolver=aiohttp.ThreadedResolver())
+        async with aiohttp.ClientSession(headers=headers, connector=connector) as session:
+            if exchange_id == "binance":
+                url = "https://fapi.binance.com/fapi/v1/klines"
+                params = {"symbol": compact, "interval": timeframe, "startTime": start_ms, "endTime": end_ms, "limit": limit}
+                async with session.get(url, params=params, timeout=15) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+                rows = data
+            elif exchange_id == "okx":
+                url = "https://www.okx.com/api/v5/market/history-candles"
+                params = {"instId": symbol.replace("/", "-").upper() + "-SWAP", "bar": timeframe, "limit": min(limit, 300)}
+                async with session.get(url, params=params, timeout=15) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+                rows = data.get("data") or []
+            elif exchange_id == "bitget":
+                url = "https://api.bitget.com/api/v2/mix/market/history-candles"
+                params = {
+                    "symbol": compact,
+                    "productType": "USDT-FUTURES",
+                    "granularity": timeframe,
+                    "startTime": start_ms,
+                    "endTime": end_ms,
+                    "limit": min(limit, 200),
+                }
+                async with session.get(url, params=params, timeout=15) as response:
+                    response.raise_for_status()
+                    data = await response.json()
+                rows = data.get("data") or []
+            elif exchange_id == "hyperliquid":
+                url = "https://api.hyperliquid.xyz/info"
+                payload = {
+                    "type": "candleSnapshot",
+                    "req": {"coin": symbol.split("/")[0].upper(), "interval": timeframe, "startTime": start_ms, "endTime": end_ms},
+                }
+                async with session.post(url, json=payload, timeout=15) as response:
+                    response.raise_for_status()
+                    rows = await response.json()
+            else:
+                raise ValueError(f"unsupported futures exchange: {exchange_id}")
+        return [self._normalize_candle(exchange_id, row) for row in rows if row]
+
+    def _normalize_candle(self, exchange_id: str, row: Any) -> dict[str, Any]:
+        if exchange_id == "hyperliquid":
+            return {
+                "time": row.get("t"),
+                "open": row.get("o"),
+                "high": row.get("h"),
+                "low": row.get("l"),
+                "close": row.get("c"),
+                "volume": row.get("v"),
+            }
+        values = list(row)
+        return {
+            "time": values[0],
+            "open": values[1],
+            "high": values[2],
+            "low": values[3],
+            "close": values[4],
+            "volume": values[5] if len(values) > 5 else None,
+        }
 
     def set_demo_price_adjustment(self, request: DemoPriceAdjustment) -> None:
         key = (request.exchange_id.strip().lower(), request.symbol.strip().upper())
@@ -1825,6 +1971,7 @@ class BotRuntime:
                     "open_count": len(self.relative_positions),
                 }
             ),
+            "historical_candle_status": to_jsonable(self.historical_candle_status),
             "balances": self.balances,
             "preflight_results": self.preflight_results,
             "live_ready": os.getenv("LIVE_TRADING", "false").strip().lower() == "true",
@@ -1861,6 +2008,7 @@ async def get_history(limit: int = 200):
             "trades": str(TRADE_LOG_PATH),
             "spread_history": str(SPREAD_LOG_PATH),
             "futures_spread_history": str(FUTURES_SPREAD_LOG_PATH),
+            "historical_candles": str(HISTORICAL_CANDLE_LOG_PATH),
         },
     }
 
@@ -1932,6 +2080,11 @@ async def preflight(request: PreflightRequest):
     )
     runtime.log("info", "Preflight check completed")
     return runtime.state()
+
+
+@app.post("/api/historical-candles/backfill")
+async def historical_candles_backfill(request: HistoricalCandlesRequest):
+    return await runtime.backfill_historical_candles(request)
 
 
 @app.post("/api/relative/open")

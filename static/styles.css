@@ -827,6 +827,19 @@ td.detail {
   gap: 18px;
 }
 
+.history-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.history-actions span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .subhead {
   margin-bottom: 8px;
   color: var(--muted);
