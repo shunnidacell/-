@@ -104,8 +104,8 @@ class RelativeTradeRequest(BaseModel):
 class HistoricalCandlesRequest(BaseModel):
     symbols: str = Field(default="")
     exchanges: str = Field(default="")
-    timeframe: str = Field(default="1h")
-    days: int = Field(default=180, ge=1, le=730)
+    timeframe: str = Field(default="1m")
+    days: int = Field(default=7, ge=1, le=730)
     limit_per_market: int = Field(default=1000, ge=50, le=1500)
 
 
@@ -1163,7 +1163,15 @@ class BotRuntime:
         for exchange_id in exchanges:
             for symbol in symbols:
                 try:
-                    candles = await self._fetch_futures_candles(exchange_id, symbol, request.timeframe, start_ms, end_ms, wanted_limit)
+                    candles = await self._fetch_futures_candles_paginated(
+                        exchange_id,
+                        symbol,
+                        request.timeframe,
+                        start_ms,
+                        end_ms,
+                        wanted_limit,
+                        timeframe_ms,
+                    )
                     total_candles += len(candles)
                     item = {
                         "timestamp": datetime.now(timezone.utc),
@@ -1195,6 +1203,37 @@ class BotRuntime:
         }
         self.log("history", f"Historical candles saved: {total_candles} candles / {ok_count} markets")
         return to_jsonable(self.historical_candle_status)
+
+    async def _fetch_futures_candles_paginated(
+        self,
+        exchange_id: str,
+        symbol: str,
+        timeframe: str,
+        start_ms: int,
+        end_ms: int,
+        limit: int,
+        timeframe_ms: int,
+    ) -> list[dict[str, Any]]:
+        all_candles: dict[int, dict[str, Any]] = {}
+        cursor = start_ms
+        hard_page_limit = 80
+        for _ in range(hard_page_limit):
+            if cursor >= end_ms:
+                break
+            page_end = min(end_ms, cursor + (limit * timeframe_ms))
+            page = await self._fetch_futures_candles(exchange_id, symbol, timeframe, cursor, page_end, limit)
+            for candle in page:
+                try:
+                    all_candles[int(candle["time"])] = candle
+                except Exception:
+                    continue
+            if not page:
+                cursor = page_end + timeframe_ms
+            else:
+                max_time = max(int(candle["time"]) for candle in page if candle.get("time") is not None)
+                cursor = max(max_time + timeframe_ms, page_end + timeframe_ms)
+            await asyncio.sleep(0.08)
+        return [all_candles[key] for key in sorted(all_candles)]
 
     async def _fetch_futures_candles(
         self,

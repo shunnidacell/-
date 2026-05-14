@@ -533,8 +533,8 @@ historicalCandlesButton?.addEventListener("click", async () => {
     body: JSON.stringify({
       symbols: settings.symbols,
       exchanges: settings.futures_exchanges,
-      timeframe: "1h",
-      days: 180,
+      timeframe: "1m",
+      days: 7,
       limit_per_market: 1000,
     }),
   });
