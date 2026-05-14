@@ -204,7 +204,7 @@ function renderPositions(positions) {
 
 function renderRelativeList(target, rows, emptyText) {
   if (!target) return;
-  const items = (rows || []).slice(0, 10);
+  const items = (rows || []).slice(0, 6);
   if (!items.length) {
     target.className = "ranking-list empty";
     target.textContent = emptyText;
@@ -657,4 +657,4 @@ historicalCandlesButton?.addEventListener("click", async () => {
 
 loadState();
 loadHistory();
-setInterval(loadState, 3000);
+setInterval(loadState, 5000);

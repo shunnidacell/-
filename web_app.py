@@ -2681,7 +2681,7 @@ class BotRuntime:
             "opportunities": self.opportunities,
             "spread_history": list(self.spread_history)[-20:],
             "futures_spread_history": list(self.futures_spread_history)[-3:],
-            "futures_market_statuses": self.futures_market_statuses,
+            "futures_market_statuses": self._state_market_statuses(),
             "logs": list(self.logs),
             "last_error": self.last_error,
             "last_tick": self.last_tick,
@@ -2746,6 +2746,8 @@ class BotRuntime:
             item = dict(row)
             item.pop("price_candles", None)
             item.pop("volume_since_9jst", None)
+            item.pop("price_return_since_9jst_series", None)
+            item.pop("price_return_since_9jst_times", None)
             return item
 
         rankings = self.relative_rankings or {}
@@ -2757,6 +2759,24 @@ class BotRuntime:
             "short_candidates": [slim_row(row) for row in rankings.get("short_candidates", [])],
             "features": [slim_row(row) for row in rankings.get("features", [])],
         }
+
+    def _state_market_statuses(self) -> list[dict[str, Any]]:
+        keys = {
+            "exchange_id",
+            "symbol",
+            "futures_symbol",
+            "status",
+            "message",
+            "bid",
+            "ask",
+            "mid",
+            "bid_capacity_quote",
+            "ask_capacity_quote",
+            "taker_fee_pct",
+            "fee_source",
+            "timestamp",
+        }
+        return [{key: item.get(key) for key in keys if key in item} for item in self.futures_market_statuses[-240:]]
 
 
 app = FastAPI()
