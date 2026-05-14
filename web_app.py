@@ -2794,6 +2794,14 @@ async def get_state():
     return runtime.state()
 
 
+@app.get("/api/relative/chart/{symbol:path}")
+async def get_relative_chart(symbol: str):
+    normalized = symbol.strip().upper()
+    if "/" not in normalized:
+        normalized = f"{normalized}/USDT"
+    return to_jsonable(runtime._historical_candles_for_symbol(normalized))
+
+
 @app.get("/api/history")
 async def get_history(limit: int = 200):
     limit = max(1, min(limit, 1000))

@@ -50,6 +50,8 @@ const relativeTradesEl = document.querySelector("#relative-trades");
 
 let settingsApplied = false;
 let relativeSelectionTouched = false;
+let openChartSymbol = "";
+let openChartData = null;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -202,6 +204,52 @@ function renderPositions(positions) {
   }).join("");
 }
 
+function renderCandlestick(candles, meta = {}) {
+  const rows = (candles || []).map((candle) => ({
+    time: candle.time || "",
+    open: Number(candle.open),
+    high: Number(candle.high),
+    low: Number(candle.low),
+    close: Number(candle.close),
+  })).filter((candle) => [candle.open, candle.high, candle.low, candle.close].every(Number.isFinite));
+  const candlePrices = rows.flatMap((candle) => [candle.open, candle.high, candle.low, candle.close]);
+  const minPrice = candlePrices.length ? Math.min(...candlePrices) : 0;
+  const maxPrice = candlePrices.length ? Math.max(...candlePrices) : 1;
+  const priceRange = maxPrice - minPrice || 1;
+  const candleWidth = rows.length ? Math.max(0.22, Math.min(1.4, 82 / rows.length)) : 0.8;
+  const candleNodes = rows.map((candle, index) => {
+    const x = rows.length <= 1 ? 50 : (index / (rows.length - 1)) * 100;
+    const yHigh = 25 - ((candle.high - minPrice) / priceRange) * 22;
+    const yLow = 25 - ((candle.low - minPrice) / priceRange) * 22;
+    const yOpen = 25 - ((candle.open - minPrice) / priceRange) * 22;
+    const yClose = 25 - ((candle.close - minPrice) / priceRange) * 22;
+    const top = Math.min(yOpen, yClose);
+    const height = Math.max(0.7, Math.abs(yClose - yOpen));
+    const klass = candle.close >= candle.open ? "up" : "down";
+    return `<g class="candle ${klass}"><line x1="${x.toFixed(2)}" y1="${yHigh.toFixed(2)}" x2="${x.toFixed(2)}" y2="${yLow.toFixed(2)}"></line><rect x="${(x - candleWidth / 2).toFixed(2)}" y="${top.toFixed(2)}" width="${candleWidth.toFixed(2)}" height="${height.toFixed(2)}"></rect></g>`;
+  }).join("");
+  const leftTime = rows[0]?.time || "-";
+  const midTime = rows.length ? rows[Math.floor((rows.length - 1) / 2)].time : "-";
+  const rightTime = rows.length ? rows[rows.length - 1].time : "-";
+  const chartLabel = rows.length
+    ? `${numberText(meta.days, 0) || "?"}d / ${escapeHtml(meta.timeframe || "?")} / ${escapeHtml(meta.exchange || "")}`
+    : "No candles";
+  return `
+    <div class="mini-volume-chart loaded-chart">
+      <span>${chartLabel}</span>
+      <svg class="candlestick-chart" viewBox="0 0 100 28" preserveAspectRatio="none" aria-label="candlestick chart">
+        ${candleNodes}
+      </svg>
+      <div class="chart-axis">
+        <b>${leftTime}</b>
+        <b>High ${numberText(maxPrice, 4)}</b>
+        <b>${midTime}</b>
+        <b>${rightTime}</b>
+      </div>
+    </div>
+  `;
+}
+
 function renderRelativeList(target, rows, emptyText) {
   if (!target) return;
   const items = (rows || []).slice(0, 6);
@@ -220,38 +268,13 @@ function renderRelativeList(target, rows, emptyText) {
       : item.short_candidate ? '<span class="signal-badge short">SHORT</span>'
       : item.eligible ? '<span class="signal-badge neutral">WATCH</span>'
       : '<span class="signal-badge blocked">BLOCK</span>';
-    const candles = (item.price_candles || []).map((candle) => ({
-      time: candle.time || "",
-      open: Number(candle.open),
-      high: Number(candle.high),
-      low: Number(candle.low),
-      close: Number(candle.close),
-    })).filter((candle) => [candle.open, candle.high, candle.low, candle.close].every(Number.isFinite));
-    const candlePrices = candles.flatMap((candle) => [candle.open, candle.high, candle.low, candle.close]);
-    const minPrice = candlePrices.length ? Math.min(...candlePrices) : 0;
-    const maxPrice = candlePrices.length ? Math.max(...candlePrices) : 1;
-    const priceRange = maxPrice - minPrice || 1;
-    const candleWidth = candles.length ? Math.max(0.22, Math.min(1.4, 82 / candles.length)) : 0.8;
-    const candleNodes = candles.map((candle, index) => {
-      const x = candles.length <= 1 ? 50 : (index / (candles.length - 1)) * 100;
-      const yHigh = 25 - ((candle.high - minPrice) / priceRange) * 22;
-      const yLow = 25 - ((candle.low - minPrice) / priceRange) * 22;
-      const yOpen = 25 - ((candle.open - minPrice) / priceRange) * 22;
-      const yClose = 25 - ((candle.close - minPrice) / priceRange) * 22;
-      const top = Math.min(yOpen, yClose);
-      const height = Math.max(0.7, Math.abs(yClose - yOpen));
-      const klass = candle.close >= candle.open ? "up" : "down";
-      return `<g class="candle ${klass}"><line x1="${x.toFixed(2)}" y1="${yHigh.toFixed(2)}" x2="${x.toFixed(2)}" y2="${yLow.toFixed(2)}"></line><rect x="${(x - candleWidth / 2).toFixed(2)}" y="${top.toFixed(2)}" width="${candleWidth.toFixed(2)}" height="${height.toFixed(2)}"></rect></g>`;
-    }).join("");
-    const leftTime = candles[0]?.time || "-";
-    const midTime = candles.length ? candles[Math.floor((candles.length - 1) / 2)].time : "-";
-    const rightTime = candles.length ? candles[candles.length - 1].time : "-";
-    const chartLabel = candles.length
-      ? `${numberText(item.price_candle_days, 0) || "?"}d / ${escapeHtml(item.price_candle_timeframe || "?")} / ${escapeHtml(item.price_candle_exchange || "")}`
-      : "No candles";
     const exclusions = (item.exclude_reasons || []).length ? item.exclude_reasons.join(', ') : 'none';
+    const chartOpen = openChartSymbol === item.symbol;
+    const chartHtml = chartOpen && openChartData
+      ? renderCandlestick(openChartData.candles || [], openChartData)
+      : chartOpen ? '<div class="chart-placeholder">Loading chart...</div>' : '';
     return `
-      <article class="ranking-row relative-row">
+      <article class="ranking-row relative-row compact-relative-row">
         <div>
           <strong>${escapeHtml(item.symbol)} ${stateBadge}</strong>
           <div class="pct-strip">
@@ -264,18 +287,10 @@ function renderRelativeList(target, rows, emptyText) {
           <span>OI 1h ${numberText(item.oi_change_1h_pct, 1)}% / 4h ${numberText(item.oi_change_4h_pct, 1)}% / Funding ${numberText(item.funding_rate, 4)}%</span>
           <span>VWAP ${numberText(item.vwap_position_pct, 3)}% / EMA20 ${numberText(item.ema20_position_pct, 3)}% / RSI ${numberText(item.rsi, 1)} / ATR ${numberText(item.atr_pct, 3)}%</span>
           <span>Spread ${numberText(item.spread_pct, 4)}% / Depth ${moneyText(item.liquidity_quote)} / Excl ${escapeHtml(exclusions)}</span>
+          ${chartHtml}
         </div>
-        <div class="mini-volume-chart ${Number(item.return_since_9jst_pct || 0) >= 0 ? "positive" : "negative"}">
-          <span>${chartLabel}</span>
-          <svg class="candlestick-chart" viewBox="0 0 100 28" preserveAspectRatio="none" aria-label="candlestick chart">
-            ${candleNodes}
-          </svg>
-          <div class="chart-axis">
-            <b>${leftTime}</b>
-            <b>High ${numberText(maxPrice, 4)}</b>
-            <b>${midTime}</b>
-            <b>${rightTime}</b>
-          </div>
+        <div class="chart-action-cell">
+          <button type="button" class="mini-button relative-chart-button" data-symbol="${escapeHtml(item.symbol)}">${chartOpen ? "Hide" : "Chart"}</button>
         </div>
         <div class="rank-net ${Number(item.relative_score) >= 0 ? "positive" : "negative"}">${numberText(item.relative_score, 2)}pt</div>
       </article>
@@ -309,6 +324,23 @@ function renderRelativePositions(positions) {
       </article>
     `;
   }).join("");
+}
+
+async function toggleRelativeChart(symbol) {
+  if (openChartSymbol === symbol) {
+    openChartSymbol = "";
+    openChartData = null;
+    await loadState();
+    return;
+  }
+  openChartSymbol = symbol;
+  openChartData = null;
+  renderRelativeList(relativeStrongEl, window.lastRelativeStrong || [], "履歴が貯まると表示します");
+  renderRelativeList(relativeWeakEl, window.lastRelativeWeak || [], "履歴が貯まると表示します");
+  const response = await fetch(`/api/relative/chart/${encodeURIComponent(symbol)}`);
+  openChartData = await response.json();
+  renderRelativeList(relativeStrongEl, window.lastRelativeStrong || [], "履歴が貯まると表示します");
+  renderRelativeList(relativeWeakEl, window.lastRelativeWeak || [], "履歴が貯まると表示します");
 }
 
 function renderRelativeTrades(trades) {
@@ -603,6 +635,12 @@ relativeSymbolEl?.addEventListener("change", () => {
 
 relativeShortSymbolsEl?.addEventListener("change", () => {
   relativeSelectionTouched = true;
+});
+
+document.addEventListener("click", async (event) => {
+  const button = event.target.closest(".relative-chart-button");
+  if (!button) return;
+  await toggleRelativeChart(button.dataset.symbol || "");
 });
 
 relativePositionsEl?.addEventListener("click", async (event) => {

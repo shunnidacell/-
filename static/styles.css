@@ -649,7 +649,7 @@ select:focus {
 }
 
 .ranking-row.relative-row {
-  grid-template-columns: minmax(0, 1.25fr) minmax(220px, 1fr) 92px;
+  grid-template-columns: minmax(0, 1fr) 74px 92px;
 }
 
 .ranking-row.positive-rank {
@@ -714,7 +714,8 @@ select:focus {
 }
 
 .mini-volume-chart {
-  min-width: 360px;
+  min-width: 0;
+  margin-top: 10px;
 }
 
 .mini-volume-chart span {
@@ -731,6 +732,22 @@ select:focus {
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
+}
+
+.chart-action-cell {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.chart-placeholder {
+  margin-top: 10px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-align: center;
 }
 
 .chart-axis {
