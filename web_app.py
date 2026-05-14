@@ -2102,11 +2102,25 @@ class BotRuntime:
             denominator = Decimal(str(len(ranked_by_momentum) - 1))
             for index, row in enumerate(ranked_by_momentum):
                 category_scores[row["symbol"]] = Decimal("2") - (Decimal(str(index)) / denominator * Decimal("4"))
+        def percentile_scores(field: str) -> dict[str, Decimal]:
+            ranked = sorted(rows, key=lambda item: Decimal(str(item.get(field) or 0)))
+            if len(ranked) <= 1:
+                return {str(row["symbol"]): Decimal("0") for row in rows}
+            denominator = Decimal(str(len(ranked) - 1))
+            scores = {}
+            for index, item in enumerate(ranked):
+                scores[str(item["symbol"])] = (Decimal(str(index)) / denominator * Decimal("2")) - Decimal("1")
+            return scores
+
+        return_1h_scores = percentile_scores("return_1h_pct")
+        return_4h_scores = percentile_scores("return_4h_pct")
         scored = []
         for row in rows:
             return_15m = Decimal(str(row.get("return_15m_pct") or 0))
             return_1h = Decimal(str(row.get("return_1h_pct") or 0))
             return_4h = Decimal(str(row.get("return_4h_pct") or 0))
+            return_1h_score = return_1h_scores.get(str(row["symbol"]), Decimal("0"))
+            return_4h_score = return_4h_scores.get(str(row["symbol"]), Decimal("0"))
             volume_15m = Decimal(str(row.get("volume_change_15m_pct") or 0))
             volume_1h = Decimal(str(row.get("volume_change_1h_pct") or 0))
             volume_4h = Decimal(str(row.get("volume_change_4h_pct") or 0))
@@ -2131,11 +2145,19 @@ class BotRuntime:
             min_liquidity = Decimal(os.getenv("RELATIVE_MIN_LIQUIDITY_QUOTE", "10000"))
             low_liquidity_penalty = Decimal("2.0") if liquidity < min_liquidity else Decimal("0")
             oi_24h_overheat = max(Decimal("0"), oi_24h - Decimal(os.getenv("RELATIVE_MAX_24H_OI_CHANGE_PCT", "40"))) / Decimal("10")
+            surge_1h_penalty = max(Decimal("0"), return_1h - Decimal(os.getenv("RELATIVE_MAX_1H_RETURN_PCT", "6"))) / Decimal("2")
+            surge_4h_penalty = max(Decimal("0"), return_4h - Decimal(os.getenv("RELATIVE_MAX_4H_RETURN_PCT", "14"))) / Decimal("4")
+            rsi_extreme_penalty = max(Decimal("0"), rsi - Decimal(os.getenv("RELATIVE_EXTREME_RSI", "80"))) / Decimal("4")
+            vwap_divergence_penalty = max(
+                Decimal("0"),
+                abs(vwap_position) - Decimal(os.getenv("RELATIVE_MAX_VWAP_DIVERGENCE_PCT", "3")),
+            ) / Decimal("2")
+            price_surge_penalty = surge_1h_penalty + surge_4h_penalty + rsi_extreme_penalty + vwap_divergence_penalty
             cap = lambda value, limit: max(-limit, min(limit, value))
             score = (
                 cap(return_15m, Decimal("5")) * Decimal("0.5")
-                + cap(return_1h, Decimal("8")) * Decimal("0.75")
-                + cap(return_4h, Decimal("12")) * Decimal("1")
+                + cap(return_1h_score, Decimal("1")) * Decimal("0.75")
+                + cap(return_4h_score, Decimal("1")) * Decimal("1")
                 + cap(volume_15m / Decimal("10"), Decimal("5")) * Decimal("1")
                 + cap(volume_1h / Decimal("10"), Decimal("5")) * Decimal("2")
                 + cap(volume_4h / Decimal("10"), Decimal("5")) * Decimal("1.5")
@@ -2149,6 +2171,7 @@ class BotRuntime:
                 - spread_penalty * Decimal("2")
                 - low_liquidity_penalty * Decimal("2")
                 - oi_24h_overheat * Decimal("2")
+                - price_surge_penalty * Decimal("2")
             )
             exclusions = []
             if liquidity < min_liquidity:
@@ -2166,16 +2189,19 @@ class BotRuntime:
             row["relative_score"] = self._smoothed_relative_score(str(row.get("symbol", "")), score)
             row["vwap_position_pct"] = vwap_position
             row["ema20_position_pct"] = ema20_position
+            row["return_1h_score"] = return_1h_score
+            row["return_4h_score"] = return_4h_score
             row["category_relative_strength_score"] = category_score
             row["funding_overheat_penalty"] = funding_overheat
             row["rsi_overheat_penalty"] = rsi_overheat
             row["spread_penalty"] = spread_penalty
             row["low_liquidity_penalty"] = low_liquidity_penalty
             row["oi_24h_overheat_penalty"] = oi_24h_overheat
+            row["price_surge_penalty"] = price_surge_penalty
             row["volume_growth_score_pct"] = cap(volume_1h, Decimal("50"))
             row["exclude_reasons"] = exclusions
             row["eligible"] = not exclusions
-            row["score_note"] = "15m/1h/4h return + volume + OI + EMA + funding/RSI/spread/liquidity"
+            row["score_note"] = "normalized 1h/4h return + volume + OI + EMA - overheat/funding/RSI/VWAP/spread/liquidity"
             scored.append(row)
         scored = sorted(scored, key=lambda item: Decimal(str(item["relative_score"])), reverse=True)
         cutoff = max(1, int(len(scored) * 0.2))

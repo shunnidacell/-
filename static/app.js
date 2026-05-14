@@ -285,6 +285,7 @@ function renderRelativeList(target, rows, emptyText) {
           </div>
           <span>Vol 15m ${numberText(item.volume_change_15m_pct, 1)}% / 1h ${numberText(item.volume_change_1h_pct, 1)}% / 4h ${numberText(item.volume_change_4h_pct, 1)}%</span>
           <span>OI 1h ${numberText(item.oi_change_1h_pct, 1)}% / 4h ${numberText(item.oi_change_4h_pct, 1)}% / Funding ${numberText(item.funding_rate, 4)}%</span>
+          <span>ReturnScore 1h ${numberText(item.return_1h_score, 2)} / 4h ${numberText(item.return_4h_score, 2)} / SurgePenalty ${numberText(item.price_surge_penalty, 2)}</span>
           <span>VWAP ${numberText(item.vwap_position_pct, 3)}% / EMA20 ${numberText(item.ema20_position_pct, 3)}% / RSI ${numberText(item.rsi, 1)} / ATR ${numberText(item.atr_pct, 3)}%</span>
           <span>Spread ${numberText(item.spread_pct, 4)}% / Depth ${moneyText(item.liquidity_quote)} / Excl ${escapeHtml(exclusions)}</span>
           ${chartHtml}
