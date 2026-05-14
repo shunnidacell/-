@@ -1808,9 +1808,9 @@ class BotRuntime:
                 values.append(Decimal(str(item["liquidity_quote"][symbol])))
         return values[-240:]
 
-    def _price_return_since_jst_9_series(self, symbol: str) -> list[Decimal]:
+    def _price_return_since_jst_9_chart(self, symbol: str) -> dict[str, Any]:
         if not self.relative_history:
-            return []
+            return {"values": [], "times": []}
         latest_time = datetime.fromisoformat(self.relative_history[-1]["timestamp"])
         jst = timezone(timedelta(hours=9))
         latest_jst = latest_time.astimezone(jst)
@@ -1819,7 +1819,7 @@ class BotRuntime:
             start_jst -= timedelta(days=1)
         base_price = None
         chart_start = max(start_jst, latest_jst - timedelta(hours=2))
-        prices = []
+        points: list[tuple[datetime, Decimal]] = []
         for item in self.relative_history:
             item_time = datetime.fromisoformat(item["timestamp"]).astimezone(jst)
             if item_time >= start_jst and symbol in item.get("mids", {}):
@@ -1827,23 +1827,30 @@ class BotRuntime:
                 if price > 0 and base_price is None:
                     base_price = price
                 if price > 0 and item_time >= chart_start:
-                    prices.append(price)
-        if not prices or base_price is None:
-            return []
+                    points.append((item_time, price))
+        if not points or base_price is None:
+            return {"values": [], "times": []}
         if base_price <= 0:
-            return []
-        series = [((price - base_price) / base_price) * Decimal("100") for price in prices]
+            return {"values": [], "times": []}
+        series = [
+            {"time": item_time.strftime("%H:%M"), "value": ((price - base_price) / base_price) * Decimal("100")}
+            for item_time, price in points
+        ]
         if len(series) <= 120:
-            return series
-        step = len(series) / Decimal("120")
-        sampled = []
-        index = Decimal("0")
-        while int(index) < len(series) and len(sampled) < 120:
-            sampled.append(series[int(index)])
-            index += step
-        if sampled and sampled[-1] != series[-1]:
-            sampled[-1] = series[-1]
-        return sampled
+            sampled = series
+        else:
+            step = len(series) / Decimal("120")
+            sampled = []
+            index = Decimal("0")
+            while int(index) < len(series) and len(sampled) < 120:
+                sampled.append(series[int(index)])
+                index += step
+            if sampled and sampled[-1] != series[-1]:
+                sampled[-1] = series[-1]
+        return {
+            "values": [item["value"] for item in sampled],
+            "times": [item["time"] for item in sampled],
+        }
 
     def _smoothed_relative_score(self, symbol: str, current_score: Decimal, lookback_items: int = 12) -> Decimal:
         scores = [current_score]
@@ -1898,6 +1905,7 @@ class BotRuntime:
             ema_fast = self._ema(series, 9)
             ema_slow = self._ema(series, 21)
             latest_price = series[-1] if series else Decimal("0")
+            price_chart = self._price_return_since_jst_9_chart(symbol)
             ema_trend = Decimal("0")
             if ema_fast is not None and ema_slow is not None and ema_slow > 0:
                 ema_trend = ((ema_fast - ema_slow) / ema_slow) * Decimal("100")
@@ -1917,7 +1925,8 @@ class BotRuntime:
                     "volume_growth_pct": self._liquidity_growth_pct(symbol),
                     "volume_source": "orderbook_liquidity_proxy",
                     "volume_since_9jst": self._liquidity_since_jst_9(symbol),
-                    "price_return_since_9jst_series": self._price_return_since_jst_9_series(symbol),
+                    "price_return_since_9jst_series": price_chart["values"],
+                    "price_return_since_9jst_times": price_chart["times"],
                     "open_interest": None,
                     "funding_rate": None,
                     "liquidation": None,
@@ -1935,6 +1944,7 @@ class BotRuntime:
             else:
                 slim = dict(item)
                 slim.pop("price_return_since_9jst_series", None)
+                slim.pop("price_return_since_9jst_times", None)
                 slim.pop("volume_since_9jst", None)
                 features.append(slim)
         return to_jsonable(

@@ -705,6 +705,29 @@ select:focus {
   background: var(--surface);
 }
 
+.chart-axis {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr 1fr;
+  gap: 8px;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.chart-axis b {
+  font: inherit;
+}
+
+.chart-axis b:nth-child(2),
+.chart-axis b:nth-child(4) {
+  text-align: right;
+}
+
+.chart-axis b:nth-child(3) {
+  text-align: center;
+}
+
 .mini-volume-chart line {
   stroke: var(--line-strong);
   stroke-dasharray: 3 3;

@@ -217,6 +217,7 @@ function renderRelativeList(target, rows, emptyText) {
       return `<span class="pct-badge ${number >= 0 ? "positive" : "negative"}">${label} ${number >= 0 ? "+" : ""}${numberText(number, 2)}%</span>`;
     };
     const priceValues = (item.price_return_since_9jst_series || []).map(Number).filter(Number.isFinite);
+    const chartTimes = item.price_return_since_9jst_times || [];
     const minReturn = priceValues.length ? Math.min(...priceValues, 0) : -1;
     const maxReturn = priceValues.length ? Math.max(...priceValues, 0) : 1;
     const rangeReturn = maxReturn - minReturn || 1;
@@ -226,6 +227,9 @@ function renderRelativeList(target, rows, emptyText) {
       const y = 24 - ((value - minReturn) / rangeReturn) * 20;
       return `${x.toFixed(1)},${y.toFixed(1)}`;
     }).join(" ");
+    const leftTime = chartTimes[0] || "-";
+    const midTime = chartTimes.length ? chartTimes[Math.floor((chartTimes.length - 1) / 2)] : "-";
+    const rightTime = chartTimes.length ? chartTimes[chartTimes.length - 1] : "-";
     return `
       <article class="ranking-row relative-row">
         <div>
@@ -237,11 +241,17 @@ function renderRelativeList(target, rows, emptyText) {
           <span>RSI ${numberText(item.rsi, 1)} / ATR ${numberText(item.atr_pct, 3)}% / EMA ${numberText(item.ema_trend_pct, 3)}%</span>
         </div>
         <div class="mini-volume-chart ${Number(item.return_since_9jst_pct || 0) >= 0 ? "positive" : "negative"}">
-          <span>2h / 9時=0%</span>
+          <span>2h chart / 9時=0%</span>
           <svg viewBox="0 0 100 28" preserveAspectRatio="none" aria-label="9時を0%にした価格推移">
             <line x1="0" y1="${zeroY.toFixed(1)}" x2="100" y2="${zeroY.toFixed(1)}"></line>
             <polyline points="${points}"></polyline>
           </svg>
+          <div class="chart-axis">
+            <b>${leftTime}</b>
+            <b>0%</b>
+            <b>${midTime}</b>
+            <b>${rightTime}</b>
+          </div>
         </div>
         <div class="rank-net ${Number(item.relative_score) >= 0 ? "positive" : "negative"}">${numberText(item.relative_score, 2)}pt</div>
       </article>
