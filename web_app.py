@@ -1652,8 +1652,17 @@ class BotRuntime:
     def _record_relative_snapshot(self, quotes: list[dict[str, Any]]) -> None:
         by_symbol: dict[str, list[Decimal]] = {}
         liquidity_by_symbol: dict[str, Decimal] = {}
+        spread_by_symbol: dict[str, list[Decimal]] = {}
+        bid_by_symbol: dict[str, list[Decimal]] = {}
+        ask_by_symbol: dict[str, list[Decimal]] = {}
         for quote in quotes:
             by_symbol.setdefault(quote["symbol"], []).append(Decimal(str(quote["mid"])))
+            bid = Decimal(str(quote.get("bid") or 0))
+            ask = Decimal(str(quote.get("ask") or 0))
+            if bid > 0 and ask > 0:
+                bid_by_symbol.setdefault(quote["symbol"], []).append(bid)
+                ask_by_symbol.setdefault(quote["symbol"], []).append(ask)
+                spread_by_symbol.setdefault(quote["symbol"], []).append(((ask - bid) / ((ask + bid) / Decimal("2"))) * Decimal("100"))
             bid_cap = Decimal(str(quote.get("bid_capacity_quote") or 0))
             ask_cap = Decimal(str(quote.get("ask_capacity_quote") or 0))
             capacity = min(bid_cap, ask_cap)
@@ -1665,7 +1674,29 @@ class BotRuntime:
         }
         if not mids:
             return
-        snapshot = {"timestamp": datetime.now(timezone.utc), "mids": mids, "liquidity_quote": liquidity_by_symbol}
+        spreads = {
+            symbol: sum(values) / Decimal(str(len(values)))
+            for symbol, values in spread_by_symbol.items()
+            if values
+        }
+        bids = {
+            symbol: sum(values) / Decimal(str(len(values)))
+            for symbol, values in bid_by_symbol.items()
+            if values
+        }
+        asks = {
+            symbol: sum(values) / Decimal(str(len(values)))
+            for symbol, values in ask_by_symbol.items()
+            if values
+        }
+        snapshot = {
+            "timestamp": datetime.now(timezone.utc),
+            "mids": mids,
+            "bids": bids,
+            "asks": asks,
+            "spread_pct": spreads,
+            "liquidity_quote": liquidity_by_symbol,
+        }
         self.relative_history.append(to_jsonable(snapshot))
         self.relative_rankings = self._build_relative_rankings()
         feature_item = {
@@ -1700,6 +1731,28 @@ class BotRuntime:
                 continue
             rows.append({"symbol": symbol, "return_pct": ((new - old) / old) * Decimal("100")})
         return sorted(rows, key=lambda item: item["return_pct"], reverse=True)
+
+    def _relative_return_pct(self, symbol: str, lookback_minutes: int) -> Decimal | None:
+        if len(self.relative_history) < 2:
+            return None
+        latest = self.relative_history[-1]
+        latest_time = datetime.fromisoformat(latest["timestamp"])
+        target_age = lookback_minutes * 60
+        base = self.relative_history[0]
+        for item in reversed(self.relative_history):
+            item_time = datetime.fromisoformat(item["timestamp"])
+            if (latest_time - item_time).total_seconds() >= target_age:
+                base = item
+                break
+        latest_mid = latest.get("mids", {}).get(symbol)
+        base_mid = base.get("mids", {}).get(symbol)
+        if latest_mid is None or base_mid is None:
+            return None
+        old = Decimal(str(base_mid))
+        new = Decimal(str(latest_mid))
+        if old <= 0:
+            return None
+        return ((new - old) / old) * Decimal("100")
 
     def _relative_volatility_pct(self, symbol: str, lookback_points: int = 80) -> Decimal:
         points = [item for item in list(self.relative_history)[-lookback_points:] if symbol in item.get("mids", {})]
@@ -1799,6 +1852,78 @@ class BotRuntime:
         if old <= 0:
             return None
         return ((new - old) / old) * Decimal("100")
+
+    def _liquidity_growth_minutes(self, symbol: str, lookback_minutes: int) -> Decimal | None:
+        if len(self.relative_history) < 2:
+            return None
+        latest = self.relative_history[-1]
+        latest_time = datetime.fromisoformat(latest["timestamp"])
+        target_age = lookback_minutes * 60
+        base = self.relative_history[0]
+        for item in reversed(self.relative_history):
+            item_time = datetime.fromisoformat(item["timestamp"])
+            if (latest_time - item_time).total_seconds() >= target_age:
+                base = item
+                break
+        latest_liquidity = latest.get("liquidity_quote", {}).get(symbol)
+        base_liquidity = base.get("liquidity_quote", {}).get(symbol)
+        if latest_liquidity is None or base_liquidity is None:
+            return None
+        old = Decimal(str(base_liquidity))
+        new = Decimal(str(latest_liquidity))
+        if old <= 0:
+            return None
+        return ((new - old) / old) * Decimal("100")
+
+    def _latest_symbol_value(self, key: str, symbol: str, default: Decimal | None = None) -> Decimal | None:
+        if not self.relative_history:
+            return default
+        value = self.relative_history[-1].get(key, {}).get(symbol)
+        if value is None:
+            return default
+        return Decimal(str(value))
+
+    def _vwap(self, symbol: str, lookback_points: int = 240) -> Decimal | None:
+        rows = [item for item in list(self.relative_history)[-lookback_points:] if symbol in item.get("mids", {})]
+        if not rows:
+            return None
+        total_price_volume = Decimal("0")
+        total_volume = Decimal("0")
+        for item in rows:
+            price = Decimal(str(item["mids"][symbol]))
+            volume = Decimal(str((item.get("liquidity_quote") or {}).get(symbol, 0)))
+            if price > 0 and volume > 0:
+                total_price_volume += price * volume
+                total_volume += volume
+        if total_volume <= 0:
+            values = [Decimal(str(item["mids"][symbol])) for item in rows]
+            return sum(values) / Decimal(str(len(values)))
+        return total_price_volume / total_volume
+
+    def _historical_return_pct(self, symbol: str, lookback_hours: int) -> Decimal | None:
+        item = self._load_historical_candle_cache().get(symbol.upper())
+        candles = item.get("candles") if item else None
+        if not candles or len(candles) < 2:
+            return None
+        parsed = []
+        for raw in candles:
+            try:
+                parsed.append((int(raw["time"]), Decimal(str(raw["close"]))))
+            except Exception:
+                continue
+        if len(parsed) < 2:
+            return None
+        parsed.sort(key=lambda value: value[0])
+        latest_time, latest_close = parsed[-1]
+        target = latest_time - (lookback_hours * 3_600_000)
+        base_close = parsed[0][1]
+        for candle_time, close in reversed(parsed):
+            if candle_time <= target:
+                base_close = close
+                break
+        if base_close <= 0:
+            return None
+        return ((latest_close - base_close) / base_close) * Decimal("100")
 
     def _liquidity_since_jst_9(self, symbol: str) -> list[Decimal]:
         if not self.relative_history:
@@ -1967,38 +2092,128 @@ class BotRuntime:
         if not rows:
             return []
         max_liquidity = max(Decimal(str(row.get("liquidity_quote") or 0)) for row in rows) or Decimal("1")
+        ranked_by_momentum = sorted(
+            rows,
+            key=lambda row: Decimal(str(row.get("return_1h_pct") or 0)) + Decimal(str(row.get("return_4h_pct") or 0)),
+            reverse=True,
+        )
+        category_scores = {}
+        if len(ranked_by_momentum) > 1:
+            denominator = Decimal(str(len(ranked_by_momentum) - 1))
+            for index, row in enumerate(ranked_by_momentum):
+                category_scores[row["symbol"]] = Decimal("2") - (Decimal(str(index)) / denominator * Decimal("4"))
         scored = []
         for row in rows:
-            volume_growth = Decimal(str(row.get("volume_growth_pct") or 0))
-            volume_growth_capped = max(Decimal("-20"), min(Decimal("20"), volume_growth))
-            ema_trend = Decimal(str(row.get("ema_trend_pct") or 0))
+            return_15m = Decimal(str(row.get("return_15m_pct") or 0))
+            return_1h = Decimal(str(row.get("return_1h_pct") or 0))
+            return_4h = Decimal(str(row.get("return_4h_pct") or 0))
+            volume_15m = Decimal(str(row.get("volume_change_15m_pct") or 0))
+            volume_1h = Decimal(str(row.get("volume_change_1h_pct") or 0))
+            volume_4h = Decimal(str(row.get("volume_change_4h_pct") or 0))
+            oi_15m = Decimal(str(row.get("oi_change_15m_pct") or 0))
+            oi_1h = Decimal(str(row.get("oi_change_1h_pct") or 0))
+            oi_4h = Decimal(str(row.get("oi_change_4h_pct") or 0))
+            oi_24h = Decimal(str(row.get("oi_change_24h_pct") or 0))
+            funding = Decimal(str(row.get("funding_rate") or 0))
             rsi = Decimal(str(row.get("rsi") or 50))
             atr = Decimal(str(row.get("atr_pct") or 0))
             liquidity = Decimal(str(row.get("liquidity_quote") or 0))
-            liquidity_score = min(Decimal("0.3"), (liquidity / max_liquidity) * Decimal("0.3"))
-            thin_penalty = Decimal("2.0") if liquidity < Decimal(os.getenv("RELATIVE_MIN_LIQUIDITY_QUOTE", "10000")) else Decimal("0")
-            rsi_score = (rsi - Decimal("50")) / Decimal("5")
-            atr_penalty = min(Decimal("8"), atr * Decimal("1.5"))
+            spread_pct = Decimal(str(row.get("spread_pct") or 0))
+            latest_price = Decimal(str(row.get("vwap") or 0))
+            vwap = Decimal(str(row.get("vwap_1h") or latest_price or 0))
+            ema20 = Decimal(str(row.get("ema20") or latest_price or 0))
+            vwap_position = Decimal("0") if vwap <= 0 or latest_price <= 0 else ((latest_price - vwap) / vwap) * Decimal("100")
+            ema20_position = Decimal("0") if ema20 <= 0 or latest_price <= 0 else ((latest_price - ema20) / ema20) * Decimal("100")
+            category_score = category_scores.get(row["symbol"], Decimal("0"))
+            funding_overheat = max(Decimal("0"), abs(funding) - Decimal(os.getenv("RELATIVE_MAX_FUNDING_ABS", "0.08"))) * Decimal("25")
+            rsi_overheat = max(Decimal("0"), rsi - Decimal(os.getenv("RELATIVE_RSI_OVERHEAT", "72"))) / Decimal("5")
+            spread_penalty = max(Decimal("0"), spread_pct - Decimal(os.getenv("RELATIVE_MAX_SPREAD_PCT", "0.12"))) * Decimal("10")
+            min_liquidity = Decimal(os.getenv("RELATIVE_MIN_LIQUIDITY_QUOTE", "10000"))
+            low_liquidity_penalty = Decimal("2.0") if liquidity < min_liquidity else Decimal("0")
+            oi_24h_overheat = max(Decimal("0"), oi_24h - Decimal(os.getenv("RELATIVE_MAX_24H_OI_CHANGE_PCT", "40"))) / Decimal("10")
+            cap = lambda value, limit: max(-limit, min(limit, value))
             score = (
-                volume_growth_capped * Decimal("0.03")
-                + ema_trend * Decimal("2.0")
-                + rsi_score
-                + liquidity_score
-                - atr_penalty
-                - thin_penalty
+                cap(return_15m, Decimal("5")) * Decimal("0.5")
+                + cap(return_1h, Decimal("8")) * Decimal("1")
+                + cap(return_4h, Decimal("12")) * Decimal("1")
+                + cap(volume_15m / Decimal("10"), Decimal("5")) * Decimal("1")
+                + cap(volume_1h / Decimal("10"), Decimal("5")) * Decimal("2")
+                + cap(volume_4h / Decimal("10"), Decimal("5")) * Decimal("1.5")
+                + cap(oi_15m / Decimal("10"), Decimal("5")) * Decimal("1")
+                + cap(oi_1h / Decimal("10"), Decimal("5")) * Decimal("2")
+                + cap(oi_4h / Decimal("10"), Decimal("5")) * Decimal("2")
+                + cap(vwap_position, Decimal("4")) * Decimal("1.5")
+                + cap(ema20_position, Decimal("4")) * Decimal("1.5")
+                + category_score * Decimal("2")
+                - funding_overheat * Decimal("2")
+                - rsi_overheat * Decimal("1")
+                - spread_penalty * Decimal("2")
+                - low_liquidity_penalty * Decimal("2")
+                - oi_24h_overheat * Decimal("2")
             )
+            exclusions = []
+            if liquidity < min_liquidity:
+                exclusions.append("low_liquidity")
+            if spread_pct > Decimal(os.getenv("RELATIVE_MAX_SPREAD_PCT", "0.12")):
+                exclusions.append("wide_spread")
+            if abs(funding) > Decimal(os.getenv("RELATIVE_MAX_FUNDING_ABS", "0.08")):
+                exclusions.append("funding_overheat")
+            if rsi > Decimal(os.getenv("RELATIVE_RSI_OVERHEAT", "72")):
+                exclusions.append("rsi_overheat")
+            if return_15m > 0 and return_1h < 0 and return_4h < 0:
+                exclusions.append("only_5m_15m_strength")
             row["relative_score"] = score
             row["raw_relative_score"] = score
             row["relative_score"] = self._smoothed_relative_score(str(row.get("symbol", "")), score)
-            row["volume_growth_score_pct"] = volume_growth_capped
-            row["score_note"] = "出来高増加/EMA/RSI/ATR/板厚"
+            row["vwap_position_pct"] = vwap_position
+            row["ema20_position_pct"] = ema20_position
+            row["category_relative_strength_score"] = category_score
+            row["funding_overheat_penalty"] = funding_overheat
+            row["rsi_overheat_penalty"] = rsi_overheat
+            row["spread_penalty"] = spread_penalty
+            row["low_liquidity_penalty"] = low_liquidity_penalty
+            row["oi_24h_overheat_penalty"] = oi_24h_overheat
+            row["volume_growth_score_pct"] = cap(volume_1h, Decimal("50"))
+            row["exclude_reasons"] = exclusions
+            row["eligible"] = not exclusions
+            row["score_note"] = "15m/1h/4h return + volume + OI + VWAP/EMA + funding/RSI/spread/liquidity"
             scored.append(row)
-        return sorted(scored, key=lambda item: Decimal(str(item["relative_score"])), reverse=True)
+        scored = sorted(scored, key=lambda item: Decimal(str(item["relative_score"])), reverse=True)
+        cutoff = max(1, int(len(scored) * 0.2))
+        long_symbols = {item["symbol"] for item in scored[:cutoff]}
+        short_symbols = {item["symbol"] for item in scored[-cutoff:]}
+        for index, item in enumerate(scored):
+            return_1h = Decimal(str(item.get("return_1h_pct") or 0))
+            return_4h = Decimal(str(item.get("return_4h_pct") or 0))
+            volume_1h = Decimal(str(item.get("volume_change_1h_pct") or 0))
+            vwap_position = Decimal(str(item.get("vwap_position_pct") or 0))
+            ema20_position = Decimal(str(item.get("ema20_position_pct") or 0))
+            item["rank_percentile"] = (Decimal(str(index)) / Decimal(str(max(1, len(scored) - 1)))) * Decimal("100")
+            item["long_candidate"] = (
+                item["symbol"] in long_symbols
+                and item["eligible"]
+                and return_1h > 0
+                and return_4h > 0
+                and volume_1h > 0
+                and vwap_position > 0
+                and ema20_position > 0
+            )
+            item["short_candidate"] = (
+                item["symbol"] in short_symbols
+                and item["eligible"]
+                and return_1h < 0
+                and return_4h < 0
+                and vwap_position < 0
+                and ema20_position < 0
+            )
+        return scored
 
     def _build_relative_rankings(self) -> dict[str, Any]:
+        rows_15m = self._relative_returns(15)
         rows_1h = self._relative_returns(60)
         rows_4h = self._relative_returns(240)
         latest = self.relative_history[-1] if self.relative_history else {}
+        row15_by_symbol = {row["symbol"]: row["return_pct"] for row in rows_15m}
         row4_by_symbol = {row["symbol"]: row["return_pct"] for row in rows_4h}
         combined = []
         for row in rows_1h:
@@ -2006,7 +2221,9 @@ class BotRuntime:
             series = self._relative_series(symbol)
             ema_fast = self._ema(series, 9)
             ema_slow = self._ema(series, 21)
+            ema20 = self._ema(series, 20)
             latest_price = series[-1] if series else Decimal("0")
+            vwap_1h = self._vwap(symbol, 240)
             price_chart = self._price_return_since_jst_9_chart(symbol)
             candle_chart = self._historical_candles_for_symbol(symbol)
             ema_trend = Decimal("0")
@@ -2015,17 +2232,27 @@ class BotRuntime:
             combined.append(
                 {
                     "symbol": symbol,
+                    "return_15m_pct": row15_by_symbol.get(symbol, self._relative_return_pct(symbol, 15)),
                     "return_1h_pct": row["return_pct"],
                     "return_4h_pct": row4_by_symbol.get(symbol, row["return_pct"]),
+                    "return_24h_pct": self._historical_return_pct(symbol, 24),
                     "return_since_9jst_pct": self._relative_return_from_jst_9(symbol),
                     "ema_fast": ema_fast,
                     "ema_slow": ema_slow,
+                    "ema20": ema20,
                     "ema_trend_pct": ema_trend,
                     "rsi": self._rsi(series),
                     "atr_pct": self._atr_pct(series),
                     "vwap": latest_price,
+                    "vwap_1h": vwap_1h,
                     "liquidity_quote": (latest.get("liquidity_quote") or {}).get(symbol, 0),
+                    "bid": (latest.get("bids") or {}).get(symbol),
+                    "ask": (latest.get("asks") or {}).get(symbol),
+                    "spread_pct": (latest.get("spread_pct") or {}).get(symbol),
                     "volume_growth_pct": self._liquidity_growth_pct(symbol),
+                    "volume_change_15m_pct": self._liquidity_growth_minutes(symbol, 15),
+                    "volume_change_1h_pct": self._liquidity_growth_minutes(symbol, 60),
+                    "volume_change_4h_pct": self._liquidity_growth_minutes(symbol, 240),
                     "volume_source": "orderbook_liquidity_proxy",
                     "volume_since_9jst": self._liquidity_since_jst_9(symbol),
                     "price_return_since_9jst_series": price_chart["values"],
@@ -2035,6 +2262,10 @@ class BotRuntime:
                     "price_candle_days": candle_chart["days"],
                     "price_candle_exchange": candle_chart["exchange"],
                     "open_interest": None,
+                    "oi_change_15m_pct": None,
+                    "oi_change_1h_pct": None,
+                    "oi_change_4h_pct": None,
+                    "oi_change_24h_pct": None,
                     "funding_rate": None,
                     "liquidation": None,
                     "data_status": "live mid/orderbook; OI/funding/liquidation pending",
@@ -2043,6 +2274,8 @@ class BotRuntime:
         combined = self._score_relative_features(combined)
         strong = combined[:12]
         weak = list(reversed(combined[-12:]))
+        long_candidates = [item for item in combined if item.get("long_candidate")]
+        short_candidates = [item for item in reversed(combined) if item.get("short_candidate")]
         visible_symbols = {item["symbol"] for item in strong + weak}
         features = []
         for item in combined:
@@ -2060,6 +2293,8 @@ class BotRuntime:
                 "updated_at": datetime.now(timezone.utc),
                 "strong": strong,
                 "weak": weak,
+                "long_candidates": long_candidates,
+                "short_candidates": short_candidates,
                 "features": features,
             }
         )

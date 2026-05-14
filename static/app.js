@@ -204,7 +204,7 @@ function renderPositions(positions) {
 
 function renderRelativeList(target, rows, emptyText) {
   if (!target) return;
-  const items = (rows || []).slice(0, 8);
+  const items = (rows || []).slice(0, 10);
   if (!items.length) {
     target.className = "ranking-list empty";
     target.textContent = emptyText;
@@ -216,6 +216,10 @@ function renderRelativeList(target, rows, emptyText) {
       const number = Number(value || 0);
       return `<span class="pct-badge ${number >= 0 ? "positive" : "negative"}">${label} ${number >= 0 ? "+" : ""}${numberText(number, 2)}%</span>`;
     };
+    const stateBadge = item.long_candidate ? '<span class="signal-badge long">LONG</span>'
+      : item.short_candidate ? '<span class="signal-badge short">SHORT</span>'
+      : item.eligible ? '<span class="signal-badge neutral">WATCH</span>'
+      : '<span class="signal-badge blocked">BLOCK</span>';
     const candles = (item.price_candles || []).map((candle) => ({
       time: candle.time || "",
       open: Number(candle.open),
@@ -243,26 +247,32 @@ function renderRelativeList(target, rows, emptyText) {
     const midTime = candles.length ? candles[Math.floor((candles.length - 1) / 2)].time : "-";
     const rightTime = candles.length ? candles[candles.length - 1].time : "-";
     const chartLabel = candles.length
-      ? `${numberText(item.price_candle_days, 0) || "?"}? / ${escapeHtml(item.price_candle_timeframe || "?")} / ${escapeHtml(item.price_candle_exchange || "")}`
-      : "???????";
+      ? `${numberText(item.price_candle_days, 0) || "?"}d / ${escapeHtml(item.price_candle_timeframe || "?")} / ${escapeHtml(item.price_candle_exchange || "")}`
+      : "No candles";
+    const exclusions = (item.exclude_reasons || []).length ? item.exclude_reasons.join(', ') : 'none';
     return `
       <article class="ranking-row relative-row">
         <div>
-          <strong>${escapeHtml(item.symbol)}</strong>
+          <strong>${escapeHtml(item.symbol)} ${stateBadge}</strong>
           <div class="pct-strip">
-            ${pctBadge("9?", item.return_since_9jst_pct)}
+            ${pctBadge("15m", item.return_15m_pct)}
+            ${pctBadge("1h", item.return_1h_pct)}
+            ${pctBadge("4h", item.return_4h_pct)}
+            ${pctBadge("24h", item.return_24h_pct)}
           </div>
-          <span>Score ${numberText(item.relative_score, 2)} / raw ${numberText(item.raw_relative_score, 2)} / ???? ${numberText(item.volume_growth_pct, 2)}% ? ${numberText(item.volume_growth_score_pct, 2)}%</span>
-          <span>RSI ${numberText(item.rsi, 1)} / ATR ${numberText(item.atr_pct, 3)}% / EMA ${numberText(item.ema_trend_pct, 3)}%</span>
+          <span>Vol 15m ${numberText(item.volume_change_15m_pct, 1)}% / 1h ${numberText(item.volume_change_1h_pct, 1)}% / 4h ${numberText(item.volume_change_4h_pct, 1)}%</span>
+          <span>OI 1h ${numberText(item.oi_change_1h_pct, 1)}% / 4h ${numberText(item.oi_change_4h_pct, 1)}% / Funding ${numberText(item.funding_rate, 4)}%</span>
+          <span>VWAP ${numberText(item.vwap_position_pct, 3)}% / EMA20 ${numberText(item.ema20_position_pct, 3)}% / RSI ${numberText(item.rsi, 1)} / ATR ${numberText(item.atr_pct, 3)}%</span>
+          <span>Spread ${numberText(item.spread_pct, 4)}% / Depth ${moneyText(item.liquidity_quote)} / Excl ${escapeHtml(exclusions)}</span>
         </div>
         <div class="mini-volume-chart ${Number(item.return_since_9jst_pct || 0) >= 0 ? "positive" : "negative"}">
           <span>${chartLabel}</span>
-          <svg class="candlestick-chart" viewBox="0 0 100 28" preserveAspectRatio="none" aria-label="?????????">
+          <svg class="candlestick-chart" viewBox="0 0 100 28" preserveAspectRatio="none" aria-label="candlestick chart">
             ${candleNodes}
           </svg>
           <div class="chart-axis">
             <b>${leftTime}</b>
-            <b>?? ${numberText(maxPrice, 4)}</b>
+            <b>High ${numberText(maxPrice, 4)}</b>
             <b>${midTime}</b>
             <b>${rightTime}</b>
           </div>

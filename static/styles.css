@@ -685,6 +685,34 @@ select:focus {
   font-weight: 900;
 }
 
+.signal-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 6px;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  vertical-align: middle;
+}
+
+.signal-badge.long {
+  border-color: rgba(42, 203, 157, 0.55);
+  color: var(--accent);
+}
+
+.signal-badge.short {
+  border-color: rgba(255, 91, 111, 0.55);
+  color: var(--danger);
+}
+
+.signal-badge.blocked {
+  border-color: rgba(245, 158, 11, 0.55);
+  color: var(--warning);
+}
+
 .mini-volume-chart {
   min-width: 360px;
 }
