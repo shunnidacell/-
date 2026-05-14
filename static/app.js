@@ -308,6 +308,8 @@ function renderRelativePositions(positions) {
   relativePositionsEl.className = "ranking-list";
   relativePositionsEl.innerHTML = positions.map((position) => {
     const pnl = Number(position.unrealized_profit || 0);
+    const heldMinutes = Number(position.held_minutes || 0);
+    const minHoldMinutes = Number(position.min_hold_minutes || 30);
     return `
       <article class="ranking-row">
         <div>
@@ -318,9 +320,10 @@ function renderRelativePositions(positions) {
           <span>Relative ${numberText(position.last_relative_pct)}% ${position.relative_basis === "vol_adjusted" ? "vol調整" : ""}</span>
           <span>Long ${numberText(position.long_return_pct)}% / Short ${numberText(position.short_return_pct)}%</span>
           <span>${moneyText(position.quote_amount)} USDT / ${escapeHtml(position.mode || "manual")}</span>
+          <span>Hold ${numberText(heldMinutes, 1)} / ${numberText(minHoldMinutes, 0)} min</span>
         </div>
         <div class="rank-net ${pnl >= 0 ? "positive" : "negative"}">${pnl >= 0 ? "+" : ""}${moneyText(pnl)}</div>
-        <button type="button" class="mini-button relative-close" data-position-id="${escapeHtml(position.id)}">決済</button>
+        <button type="button" class="mini-button relative-close" data-position-id="${escapeHtml(position.id)}">Close</button>
       </article>
     `;
   }).join("");

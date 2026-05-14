@@ -2423,6 +2423,8 @@ class BotRuntime:
         unrealized = Decimal("0")
         take_profit = Decimal(os.getenv("RELATIVE_TAKE_PROFIT_PCT", "5.0"))
         stop_loss = Decimal(os.getenv("RELATIVE_STOP_LOSS_PCT", "-1.5"))
+        min_hold_minutes = Decimal(os.getenv("RELATIVE_MIN_HOLD_MINUTES", "30"))
+        now_time = datetime.now(timezone.utc)
         to_close: list[tuple[str, str]] = []
         for position_id, position in self.relative_positions.items():
             long_symbol = position["long_symbol"]
@@ -2458,12 +2460,19 @@ class BotRuntime:
                 position["short_return_pct"] = short_avg
             amount = Decimal(str(position["quote_amount"]))
             profit = amount * (relative_pct / Decimal("100"))
+            opened_at = position.get("opened_at", now_time)
+            if isinstance(opened_at, str):
+                opened_at = datetime.fromisoformat(opened_at)
+            held_minutes = Decimal(str((now_time - opened_at).total_seconds() / 60))
             position["last_relative_pct"] = relative_pct
             position["unrealized_profit"] = profit
+            position["held_minutes"] = held_minutes
+            position["min_hold_minutes"] = min_hold_minutes
             unrealized += profit
-            if close_on_threshold and relative_pct >= take_profit:
+            can_auto_close = close_on_threshold and held_minutes >= min_hold_minutes
+            if can_auto_close and relative_pct >= take_profit:
                 to_close.append((position_id, "take_profit"))
-            elif close_on_threshold and relative_pct <= stop_loss:
+            elif can_auto_close and relative_pct <= stop_loss:
                 to_close.append((position_id, "stop_loss"))
         self.relative_unrealized_profit = unrealized
         for position_id, status in to_close:
