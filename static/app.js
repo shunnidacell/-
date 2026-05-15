@@ -414,7 +414,11 @@ function renderLearningReport(report) {
   }
   relativeLearningReportEl.className = "ranking-list";
   const factors = (report.factor_summary || []).slice(0, 5);
+  const edges = (report.factor_edges || []).slice(0, 5);
   const bestRules = (report.best_exit_rules || []).slice(0, 3);
+  const topPairs = (report.top_virtual_pairs || []).slice(0, 5);
+  const pairSummary = (report.pair_summary || []).slice(0, 5);
+  const tendencyText = (value) => value === "higher_when_winning" ? "win high" : "win low";
   relativeLearningReportEl.innerHTML = `
     <article class="score-row learning-row">
       <strong>Win ${numberText(report.win_rate_pct, 1)}%</strong>
@@ -434,6 +438,49 @@ function renderLearningReport(report) {
         <span>TP ${rule.take_profit_count}</span>
         <span>SL ${rule.stop_loss_count}</span>
         <span>Time ${rule.time_exit_count}</span>
+      </article>
+    `).join("")}
+    <article class="score-row learning-row learning-heading">
+      <strong>Winning Common Factors</strong>
+      <span>largest win/loss gaps</span>
+    </article>
+    ${edges.map((edge) => `
+      <article class="score-row learning-row">
+        <strong>${escapeHtml(edge.key)}</strong>
+        <span>Long ${tendencyText(edge.long_tendency)}</span>
+        <span>WL ${numberText(edge.win_long_avg, 2)}</span>
+        <span>LL ${numberText(edge.loss_long_avg, 2)}</span>
+        <span>Short ${tendencyText(edge.short_tendency)}</span>
+        <span>WS ${numberText(edge.win_short_avg, 2)}</span>
+        <span>LS ${numberText(edge.loss_short_avg, 2)}</span>
+      </article>
+    `).join("")}
+    <article class="score-row learning-row learning-heading">
+      <strong>Top Virtual Pairs</strong>
+      <span>if traded at that time</span>
+    </article>
+    ${topPairs.map((trade) => `
+      <article class="score-row learning-row">
+        <strong>Long ${escapeHtml(trade.long_symbol)} / Short ${escapeHtml(trade.short_symbol)}</strong>
+        <span class="${Number(trade.pnl_after_cost_pct || 0) >= 0 ? "positive" : "negative"}">${numberText(trade.pnl_after_cost_pct, 3)}%</span>
+        <span>Rel ${numberText(trade.relative_return_pct, 3)}%</span>
+        <span>MFE ${numberText(trade.max_favorable_pct, 3)}%</span>
+        <span>MAE ${numberText(trade.max_adverse_pct, 3)}%</span>
+        <span>Best ${numberText(trade.minutes_to_best, 1)}m</span>
+      </article>
+    `).join("")}
+    <article class="score-row learning-row learning-heading">
+      <strong>Repeated Pair Stats</strong>
+      <span>pairs seen 2+ times</span>
+    </article>
+    ${pairSummary.map((pair) => `
+      <article class="score-row learning-row">
+        <strong>Long ${escapeHtml(pair.long_symbol)} / Short ${escapeHtml(pair.short_symbol)}</strong>
+        <span>${pair.count}x</span>
+        <span>Win ${numberText(pair.win_rate_pct, 1)}%</span>
+        <span class="${Number(pair.avg_pnl_after_cost_pct || 0) >= 0 ? "positive" : "negative"}">Avg ${numberText(pair.avg_pnl_after_cost_pct, 3)}%</span>
+        <span>Best ${numberText(pair.best_pnl_after_cost_pct, 3)}%</span>
+        <span>Best ${numberText(pair.avg_minutes_to_best, 1)}m</span>
       </article>
     `).join("")}
     ${factors.map((factor) => `

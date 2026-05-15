@@ -361,7 +361,7 @@ def relative_learning_report(
     snapshots: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if snapshots is None:
-        snapshots = read_tail_jsonl(RELATIVE_FEATURE_LOG_PATH, min(limit, 80))
+        snapshots = read_tail_jsonl(RELATIVE_FEATURE_LOG_PATH, min(limit, 2000))
     snapshots = [item for item in snapshots[-limit:] if item.get("features")]
     if len(snapshots) < 2:
         return {"status": "not_enough_data", "sample_count": len(snapshots), "trade_count": 0}
@@ -546,6 +546,67 @@ def relative_learning_report(
         }
         for key in keys
     ]
+
+    def decimal_value(value: Any, default: Decimal = Decimal("0")) -> Decimal:
+        try:
+            return Decimal(str(value))
+        except Exception:
+            return default
+
+    def part_delta(row: dict[str, Any]) -> Decimal:
+        long_win = decimal_value(row.get("win_long_avg"))
+        long_loss = decimal_value(row.get("loss_long_avg"))
+        short_win = decimal_value(row.get("win_short_avg"))
+        short_loss = decimal_value(row.get("loss_short_avg"))
+        return abs(long_win - long_loss) + abs(short_win - short_loss)
+
+    factor_edges = []
+    for row in factor_summary:
+        delta = part_delta(row)
+        if delta <= Decimal("0.02"):
+            continue
+        factor_edges.append(
+            {
+                **row,
+                "edge_size": delta,
+                "long_tendency": "higher_when_winning"
+                if decimal_value(row["win_long_avg"]) > decimal_value(row["loss_long_avg"])
+                else "lower_when_winning",
+                "short_tendency": "higher_when_winning"
+                if decimal_value(row["win_short_avg"]) > decimal_value(row["loss_short_avg"])
+                else "lower_when_winning",
+            }
+        )
+    factor_edges.sort(key=lambda item: Decimal(str(item["edge_size"])), reverse=True)
+
+    top_pairs = sorted(trades, key=lambda trade: trade["pnl_after_cost_pct"], reverse=True)[:12]
+    pair_groups: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for trade in trades:
+        pair_groups.setdefault((trade["long_symbol"], trade["short_symbol"]), []).append(trade)
+    pair_summary = []
+    for (long_symbol, short_symbol), group in pair_groups.items():
+        if len(group) < 2:
+            continue
+        group_total = sum((Decimal(str(trade["pnl_after_cost_pct"])) for trade in group), Decimal("0"))
+        group_wins = [trade for trade in group if trade["win"]]
+        pair_summary.append(
+            {
+                "long_symbol": long_symbol,
+                "short_symbol": short_symbol,
+                "count": len(group),
+                "win_rate_pct": (Decimal(str(len(group_wins))) / Decimal(str(len(group)))) * Decimal("100"),
+                "avg_pnl_after_cost_pct": group_total / Decimal(str(len(group))),
+                "best_pnl_after_cost_pct": max(Decimal(str(trade["pnl_after_cost_pct"])) for trade in group),
+                "avg_minutes_to_best": (
+                    sum((Decimal(str(trade["minutes_to_best"])) for trade in group if trade.get("minutes_to_best") is not None), Decimal("0"))
+                    / Decimal(str(sum(1 for trade in group if trade.get("minutes_to_best") is not None)))
+                    if any(trade.get("minutes_to_best") is not None for trade in group)
+                    else None
+                ),
+            }
+        )
+    pair_summary.sort(key=lambda item: (Decimal(str(item["avg_pnl_after_cost_pct"])), Decimal(str(item["best_pnl_after_cost_pct"]))), reverse=True)
+
     return to_jsonable(
         {
             "status": "ok",
@@ -564,6 +625,9 @@ def relative_learning_report(
             "worst": min(trades, key=lambda trade: trade["pnl_after_cost_pct"]),
             "recent_trades": trades[-30:],
             "factor_summary": factor_summary,
+            "factor_edges": factor_edges[:8],
+            "top_virtual_pairs": top_pairs,
+            "pair_summary": pair_summary[:8],
         }
     )
 

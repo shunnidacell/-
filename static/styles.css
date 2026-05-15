@@ -726,6 +726,16 @@ select:focus {
   white-space: nowrap;
 }
 
+.learning-heading {
+  background: #20262d;
+  border-color: #38424d;
+  margin-top: 8px;
+}
+
+.learning-heading strong {
+  color: var(--text);
+}
+
 .signal-badge {
   display: inline-flex;
   align-items: center;
