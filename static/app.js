@@ -49,6 +49,7 @@ const relativeAllEl = document.querySelector("#relative-all");
 const relativePositionsEl = document.querySelector("#relative-positions");
 const relativeTradesEl = document.querySelector("#relative-trades");
 const relativeLearningReportEl = document.querySelector("#relative-learning-report");
+const relativeTradeGateEl = document.querySelector("#relative-trade-gate");
 
 let settingsApplied = false;
 let relativeSelectionTouched = false;
@@ -500,6 +501,49 @@ function renderLearningReport(report) {
   `;
 }
 
+function renderRelativeTradeGate(gate) {
+  if (!relativeTradeGateEl) return;
+  const reports = gate?.reports || [];
+  const conditions = gate?.entry_conditions || [];
+  if (!reports.length && !conditions.length) {
+    relativeTradeGateEl.className = "ranking-list empty";
+    relativeTradeGateEl.textContent = "条件判定待ち";
+    return;
+  }
+  relativeTradeGateEl.className = "ranking-list";
+  const reportRows = reports.slice(0, 5).map((report) => {
+    const ok = Boolean(report.allowed);
+    const failed = (report.failed || []).slice(0, 4).join(" / ") || "all passed";
+    const passed = (report.passed || []).slice(0, 3).join(" / ");
+    return `
+      <article class="score-row learning-row">
+        <strong>${ok ? "ENTRY OK" : "WAIT"} ${escapeHtml(report.long_symbol)} / ${escapeHtml(report.short_symbol)}</strong>
+        <span class="${ok ? "positive" : "negative"}">gap ${numberText(report.score_gap, 2)}</span>
+        <span>OK ${escapeHtml(passed)}</span>
+        <span>NG ${escapeHtml(failed)}</span>
+      </article>
+    `;
+  }).join("");
+  const conditionRows = conditions.map((condition) => `
+    <article class="score-row learning-row">
+      <strong>条件</strong>
+      <span>${escapeHtml(condition)}</span>
+    </article>
+  `).join("");
+  relativeTradeGateEl.innerHTML = `
+    <article class="score-row learning-row learning-heading">
+      <strong>${escapeHtml(gate?.mode || "Winning entry gate")}</strong>
+      <span>${gate?.updated_at ? new Date(gate.updated_at).toLocaleString() : "-"}</span>
+    </article>
+    ${reportRows}
+    <article class="score-row learning-row learning-heading">
+      <strong>Entry Conditions</strong>
+      <span>全部満たした時だけ自動デモ取引</span>
+    </article>
+    ${conditionRows}
+  `;
+}
+
 async function toggleRelativeChart(symbol) {
   if (openChartSymbol === symbol) {
     openChartSymbol = "";
@@ -670,6 +714,7 @@ function renderState(state) {
   renderRelativeList(relativeWeakEl, state.relative_rankings?.weak || [], "履歴が貯まると表示します");
   renderRelativeAllScores(relativeAllEl, state.relative_rankings?.features || [], "履歴が貯まると表示します");
   renderRelativePositions(state.relative_positions || []);
+  renderRelativeTradeGate(state.relative_trade_gate || {});
   if (relativeLearningReportEl && Date.now() - lastLearningReportAt > 60000) {
     lastLearningReportAt = Date.now();
     fetch("/api/relative/learning-report?limit=800&horizon_minutes=30&assumed_cost_pct=0.10")

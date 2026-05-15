@@ -849,6 +849,7 @@ class BotRuntime:
         self.relative_closed_trades: deque[dict[str, Any]] = deque(maxlen=200)
         self.relative_realized_profit = Decimal("0")
         self.relative_unrealized_profit = Decimal("0")
+        self.relative_trade_gate: dict[str, Any] = {}
         self.historical_candle_status: dict[str, Any] = {}
         self._historical_candle_cache_mtime: float | None = None
         self._historical_candle_cache: dict[str, dict[str, Any]] = {}
@@ -2929,6 +2930,62 @@ class BotRuntime:
         basket = [item for item in weak if item.get("symbol") != long_symbol]
         return basket[:count]
 
+    def _relative_winning_gate(self, long_item: dict[str, Any], short_item: dict[str, Any]) -> dict[str, Any]:
+        def dec(row: dict[str, Any], key: str) -> Decimal:
+            try:
+                return Decimal(str(row.get(key) or 0))
+            except Exception:
+                return Decimal("0")
+
+        score_gap = dec(long_item, "relative_score") - dec(short_item, "relative_score")
+        long_market_1h = dec(long_item, "market_relative_1h_pct")
+        long_market_4h = dec(long_item, "market_relative_4h_pct")
+        short_market_1h = dec(short_item, "market_relative_1h_pct")
+        short_market_4h = dec(short_item, "market_relative_4h_pct")
+        long_1h_return = dec(long_item, "return_1h_pct")
+        long_4h_return = dec(long_item, "return_4h_pct")
+        short_1h_return = dec(short_item, "return_1h_pct")
+        short_4h_return = dec(short_item, "return_4h_pct")
+        long_slip = dec(long_item, "estimated_slippage_100usdt_pct")
+        short_slip = dec(short_item, "estimated_slippage_100usdt_pct")
+        long_spread = dec(long_item, "spread_pct")
+        short_spread = dec(short_item, "spread_pct")
+        long_funding = abs(dec(long_item, "funding_rate"))
+        short_funding = abs(dec(short_item, "funding_rate"))
+        max_slip = max(long_slip, short_slip)
+        max_spread = max(long_spread, short_spread)
+        max_funding = max(long_funding, short_funding)
+        conditions = [
+            ("score_gap", score_gap >= Decimal(os.getenv("RELATIVE_GATE_MIN_SCORE_GAP", "10")), f"score gap {score_gap:.2f}+"),
+            ("long_vs_market", long_market_1h >= Decimal(os.getenv("RELATIVE_GATE_MIN_LONG_MARKET_1H", "0.05")) and long_market_4h >= Decimal(os.getenv("RELATIVE_GATE_MIN_LONG_MARKET_4H", "0.10")), f"long beats market 1h/4h {long_market_1h:.2f}/{long_market_4h:.2f}%"),
+            ("short_vs_market", short_market_1h <= Decimal(os.getenv("RELATIVE_GATE_MAX_SHORT_MARKET_1H", "-0.05")) and short_market_4h <= Decimal(os.getenv("RELATIVE_GATE_MAX_SHORT_MARKET_4H", "-0.10")), f"short lags market 1h/4h {short_market_1h:.2f}/{short_market_4h:.2f}%"),
+            ("long_trend", long_1h_return > Decimal("0") and long_4h_return > Decimal("0"), f"long 1h/4h positive {long_1h_return:.2f}/{long_4h_return:.2f}%"),
+            ("short_trend", short_1h_return < Decimal("0") and short_4h_return < Decimal("0"), f"short 1h/4h negative {short_1h_return:.2f}/{short_4h_return:.2f}%"),
+            ("not_too_hot", long_1h_return <= Decimal(os.getenv("RELATIVE_GATE_MAX_LONG_1H_RETURN", "3.0")), f"long not overextended 1h {long_1h_return:.2f}%"),
+            ("depth", max_slip <= Decimal(os.getenv("RELATIVE_GATE_MAX_SLIP100_PCT", "0.12")), f"Slip100 <= {max_slip:.4f}%"),
+            ("spread", max_spread <= Decimal(os.getenv("RELATIVE_GATE_MAX_SPREAD_PCT", "0.08")), f"spread <= {max_spread:.4f}%"),
+            ("funding", max_funding <= Decimal(os.getenv("RELATIVE_GATE_MAX_FUNDING_ABS", "0.05")), f"funding abs <= {max_funding:.4f}%"),
+            ("eligible", bool(long_item.get("eligible")) and bool(short_item.get("eligible")), "both symbols eligible"),
+        ]
+        passed = [label for _, ok, label in conditions if ok]
+        failed = [label for _, ok, label in conditions if not ok]
+        return {
+            "allowed": not failed,
+            "long_symbol": long_item.get("symbol"),
+            "short_symbol": short_item.get("symbol"),
+            "score_gap": score_gap,
+            "passed": passed,
+            "failed": failed,
+            "conditions": [
+                {
+                    "key": key,
+                    "ok": ok,
+                    "label": label,
+                }
+                for key, ok, label in conditions
+            ],
+        }
+
     async def open_relative_position_async(self, request: RelativeTradeRequest) -> dict[str, Any]:
         latest_mids = dict(self.relative_history[-1]["mids"]) if self.relative_history else {}
         symbols = [request.symbol.strip().upper()] + [symbol.strip().upper() for symbol in request.short_symbols]
@@ -3063,16 +3120,23 @@ class BotRuntime:
         if len(strong) < basket_size or len(weak) < basket_size:
             return
         latest_mids = self.relative_history[-1]["mids"] if self.relative_history else {}
-        long_symbols = [item["symbol"] for item in strong[:basket_size] if item.get("symbol") in latest_mids]
-        short_symbols = [item["symbol"] for item in weak[:basket_size] if item.get("symbol") in latest_mids]
-        if len(long_symbols) < basket_size or len(short_symbols) < basket_size:
+        strong_items = [item for item in strong[:basket_size] if item.get("symbol") in latest_mids]
+        weak_items = [item for item in weak[:basket_size] if item.get("symbol") in latest_mids]
+        if len(strong_items) < basket_size or len(weak_items) < basket_size:
             return
         total_quote = Decimal(os.getenv("RELATIVE_PAPER_QUOTE", "10"))
         per_long_quote = total_quote / Decimal(str(basket_size))
-        for index, long_symbol in enumerate(long_symbols):
+        gate_reports = []
+        for index, long_item in enumerate(strong_items):
             if len([position for position in self.relative_positions.values() if position.get("mode") == "auto_top_bottom"]) >= basket_size:
                 break
-            short_symbol = short_symbols[index]
+            short_item = weak_items[index]
+            gate = self._relative_winning_gate(long_item, short_item)
+            gate_reports.append(to_jsonable(gate))
+            if not gate["allowed"]:
+                continue
+            long_symbol = str(long_item["symbol"])
+            short_symbol = str(short_item["symbol"])
             if long_symbol == short_symbol:
                 continue
             if long_symbol in existing_auto_longs:
@@ -3089,6 +3153,22 @@ class BotRuntime:
                 ),
                 latest_mids=latest_mids,
             )
+        self.relative_trade_gate = {
+            "updated_at": datetime.now(timezone.utc),
+            "mode": "勝つ可能性が高い時だけデモエントリー",
+            "reports": gate_reports,
+            "entry_conditions": [
+                "スコア差が10pt以上",
+                "LongがBTC/ETHより1時間+0.05%以上、4時間+0.10%以上強い",
+                "ShortがBTC/ETHより1時間-0.05%以上、4時間-0.10%以上弱い",
+                "Longは1時間・4時間ともプラス、Shortは1時間・4時間ともマイナス",
+                "Longの1時間上昇率が3%以下で飛び乗りすぎない",
+                "Slip100が0.12%以下",
+                "スプレッドが0.08%以下",
+                "Funding絶対値が0.05%以下",
+                "除外条件なし",
+            ],
+        }
 
     def _refresh_relative_pnl(self, close_on_threshold: bool = True) -> None:
         latest_mids = self.relative_history[-1]["mids"] if self.relative_history else {}
@@ -3407,6 +3487,7 @@ class BotRuntime:
             "futures_boost_symbols": sorted(self.futures_boost_symbols.keys()),
             "futures_movement_symbols": to_jsonable(self.futures_movement_symbols),
             "relative_rankings": relative_rankings,
+            "relative_trade_gate": to_jsonable(self.relative_trade_gate),
             "relative_feature_history_count": len(self.relative_feature_history),
             "relative_positions": to_jsonable(list(self.relative_positions.values())),
             "relative_closed_trades": list(self.relative_closed_trades),
