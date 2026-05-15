@@ -258,6 +258,8 @@ function renderScoreBreakdown(item) {
     "15m_return": "15m return",
     "1h_return_rank": "1h return rank",
     "4h_return_rank": "4h return rank",
+    "market_relative_1h": "1h vs BTC/ETH",
+    "market_relative_4h": "4h vs BTC/ETH",
     "15m_volume": "15m volume",
     "1h_volume": "1h volume",
     "4h_volume": "4h volume",
@@ -271,6 +273,7 @@ function renderScoreBreakdown(item) {
     "rsi_overheat": "RSI",
     "wide_spread": "spread",
     "low_liquidity": "liquidity",
+    "estimated_slippage": "size slip",
     "24h_oi_overheat": "24h OI",
     "price_surge": "surge",
   };
@@ -325,6 +328,7 @@ function renderRelativeList(target, rows, emptyText, limit = 6) {
           <span>BidDepth 1h ${numberText(item.bid_depth_change_1h_pct, 1)}% / 4h ${numberText(item.bid_depth_change_4h_pct, 1)}% · AskDepth 1h ${numberText(item.ask_depth_change_1h_pct, 1)}% / 4h ${numberText(item.ask_depth_change_4h_pct, 1)}%</span>
           <span>OI 1h ${numberText(item.oi_change_1h_pct, 1)}% / 4h ${numberText(item.oi_change_4h_pct, 1)}% / Funding ${numberText(item.funding_rate, 4)}%</span>
           <span>ReturnScore 1h ${numberText(item.return_1h_score, 2)} / 4h ${numberText(item.return_4h_score, 2)} / SurgePenalty ${numberText(item.price_surge_penalty, 2)}</span>
+          <span>vs ${escapeHtml(item.market_benchmark_symbol || "BTC/ETH")} 1h ${numberText(item.market_relative_1h_pct, 2)}% / 4h ${numberText(item.market_relative_4h_pct, 2)}% / Slip100 ${numberText(item.estimated_slippage_100usdt_pct, 4)}%</span>
           <span>VWAP ${numberText(item.vwap_position_pct, 3)}% / EMA20 ${numberText(item.ema20_position_pct, 3)}% / RSI ${numberText(item.rsi, 1)} / ATR ${numberText(item.atr_pct, 3)}%</span>
           <span>Spread ${numberText(item.spread_pct, 4)}% / Depth ${moneyText(item.liquidity_quote)} / Excl ${escapeHtml(exclusions)}</span>
           <span>Raw ${numberText(item.raw_relative_score, 2)}pt / Smoothed ${numberText(item.relative_score, 2)}pt</span>
@@ -360,11 +364,12 @@ function renderRelativeAllScores(target, rows, emptyText) {
         <span>raw ${numberText(item.raw_relative_score, 2)}</span>
         <span>1hRet ${numberText(parts["1h_return_rank"], 2)}</span>
         <span>4hRet ${numberText(parts["4h_return_rank"], 2)}</span>
+        <span>vsMkt ${numberText(Number(parts.market_relative_1h || 0) + Number(parts.market_relative_4h || 0), 2)}</span>
         <span>1hLiq ${numberText(parts["1h_volume"], 2)}</span>
         <span>4hLiq ${numberText(parts["4h_volume"], 2)}</span>
         <span>Depth ${numberText(parts.bid_ask_depth_pressure, 2)}</span>
         <span>EMA ${numberText(parts.ema20_position, 2)}</span>
-        <span>Penalty ${numberText(Number(parts.rsi_overheat || 0) + Number(parts.price_surge || 0) + Number(parts.funding_overheat || 0), 2)}</span>
+        <span>Penalty ${numberText(Number(parts.rsi_overheat || 0) + Number(parts.price_surge || 0) + Number(parts.funding_overheat || 0) + Number(parts.estimated_slippage || 0), 2)}</span>
         <span>Excl ${escapeHtml(exclusions)}</span>
       </article>
     `;

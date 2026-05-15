@@ -535,7 +535,20 @@ def relative_learning_report(
                 continue
         return sum(values) / Decimal(str(len(values))) if values else Decimal("0")
 
-    keys = ["1h_return_rank", "4h_return_rank", "1h_volume", "4h_volume", "bid_ask_depth_pressure", "ema20_position", "relative_rank", "rsi_overheat", "price_surge"]
+    keys = [
+        "1h_return_rank",
+        "4h_return_rank",
+        "market_relative_1h",
+        "market_relative_4h",
+        "1h_volume",
+        "4h_volume",
+        "bid_ask_depth_pressure",
+        "estimated_slippage",
+        "ema20_position",
+        "relative_rank",
+        "rsi_overheat",
+        "price_surge",
+    ]
     factor_summary = [
         {
             "key": key,
@@ -2657,6 +2670,8 @@ class BotRuntime:
 
         return_1h_scores = percentile_scores("return_1h_pct")
         return_4h_scores = percentile_scores("return_4h_pct")
+        market_relative_1h_scores = percentile_scores("market_relative_1h_pct")
+        market_relative_4h_scores = percentile_scores("market_relative_4h_pct")
         scored = []
         for row in rows:
             return_15m = Decimal(str(row.get("return_15m_pct") or 0))
@@ -2664,6 +2679,8 @@ class BotRuntime:
             return_4h = Decimal(str(row.get("return_4h_pct") or 0))
             return_1h_score = return_1h_scores.get(str(row["symbol"]), Decimal("0"))
             return_4h_score = return_4h_scores.get(str(row["symbol"]), Decimal("0"))
+            market_relative_1h_score = market_relative_1h_scores.get(str(row["symbol"]), Decimal("0"))
+            market_relative_4h_score = market_relative_4h_scores.get(str(row["symbol"]), Decimal("0"))
             volume_15m = Decimal(str(row.get("volume_change_15m_pct") or 0))
             volume_1h = Decimal(str(row.get("volume_change_1h_pct") or 0))
             volume_4h = Decimal(str(row.get("volume_change_4h_pct") or 0))
@@ -2686,6 +2703,8 @@ class BotRuntime:
             atr = Decimal(str(row.get("atr_pct") or 0))
             liquidity = Decimal(str(row.get("liquidity_quote") or 0))
             spread_pct = Decimal(str(row.get("spread_pct") or 0))
+            slippage_test_quote = Decimal(os.getenv("RELATIVE_SLIPPAGE_TEST_QUOTE", "100"))
+            estimated_slippage_pct = (slippage_test_quote / liquidity) * Decimal("100") if liquidity > 0 else Decimal("999")
             latest_price = Decimal(str(row.get("vwap") or 0))
             vwap = Decimal(str(row.get("vwap_1h") or latest_price or 0))
             ema20 = Decimal(str(row.get("ema20") or latest_price or 0))
@@ -2713,6 +2732,8 @@ class BotRuntime:
                 "15m_return": cap(return_15m, Decimal("5")) * Decimal("0.5"),
                 "1h_return_rank": cap(return_1h_score, Decimal("1")) * Decimal("0.75"),
                 "4h_return_rank": cap(return_4h_score, Decimal("1")) * Decimal("1"),
+                "market_relative_1h": cap(market_relative_1h_score, Decimal("1")) * Decimal("1.2"),
+                "market_relative_4h": cap(market_relative_4h_score, Decimal("1")) * Decimal("1.6"),
                 "15m_volume": cap(score_volume_15m / Decimal("10"), Decimal("4")) * Decimal("0.5"),
                 "1h_volume": cap(score_volume_1h / Decimal("10"), Decimal("5")) * Decimal("0.8"),
                 "4h_volume": cap(score_volume_4h / Decimal("10"), Decimal("5")) * Decimal("0.6"),
@@ -2726,6 +2747,7 @@ class BotRuntime:
                 "rsi_overheat": -(rsi_overheat * Decimal("1")),
                 "wide_spread": -(spread_penalty * Decimal("2")),
                 "low_liquidity": -(low_liquidity_penalty * Decimal("2")),
+                "estimated_slippage": -(max(Decimal("0"), estimated_slippage_pct - Decimal(os.getenv("RELATIVE_MAX_EST_SLIPPAGE_PCT", "0.08"))) * Decimal("8")),
                 "24h_oi_overheat": -(oi_24h_overheat * Decimal("2")),
                 "price_surge": -(price_surge_penalty * Decimal("2")),
             }
@@ -2733,6 +2755,8 @@ class BotRuntime:
             exclusions = []
             if liquidity < min_liquidity:
                 exclusions.append("low_liquidity")
+            if estimated_slippage_pct > Decimal(os.getenv("RELATIVE_HARD_MAX_EST_SLIPPAGE_PCT", "0.30")):
+                exclusions.append("thin_size_depth")
             if spread_pct > Decimal(os.getenv("RELATIVE_MAX_SPREAD_PCT", "0.12")):
                 exclusions.append("wide_spread")
             if abs(funding) > Decimal(os.getenv("RELATIVE_MAX_FUNDING_ABS", "0.08")):
@@ -2749,6 +2773,9 @@ class BotRuntime:
             row["ema20_position_pct"] = ema20_position
             row["return_1h_score"] = return_1h_score
             row["return_4h_score"] = return_4h_score
+            row["market_relative_1h_score"] = market_relative_1h_score
+            row["market_relative_4h_score"] = market_relative_4h_score
+            row["estimated_slippage_100usdt_pct"] = estimated_slippage_pct
             row["bid_ask_depth_pressure_score"] = depth_pressure
             row["category_relative_strength_score"] = category_score
             row["funding_overheat_penalty"] = funding_overheat
@@ -2760,7 +2787,7 @@ class BotRuntime:
             row["volume_growth_score_pct"] = cap(volume_1h, Decimal("50"))
             row["exclude_reasons"] = exclusions
             row["eligible"] = not exclusions
-            row["score_note"] = "normalized 1h/4h return + volume + OI + EMA - overheat/funding/RSI/VWAP/spread/liquidity"
+            row["score_note"] = "normalized 1h/4h return + BTC/ETH relative strength + volume + OI + EMA - overheat/funding/RSI/VWAP/spread/liquidity/slippage"
             scored.append(row)
         scored = sorted(scored, key=lambda item: Decimal(str(item["relative_score"])), reverse=True)
         cutoff = max(1, int(len(scored) * 0.2))
@@ -2796,6 +2823,9 @@ class BotRuntime:
         latest = self.relative_history[-1] if self.relative_history else {}
         row15_by_symbol = {row["symbol"]: row["return_pct"] for row in rows_15m}
         row4_by_symbol = {row["symbol"]: row["return_pct"] for row in rows_4h}
+        row1_by_symbol = {row["symbol"]: row["return_pct"] for row in rows_1h}
+        market_1h = Decimal(str(row1_by_symbol.get("BTC/USDT", row1_by_symbol.get("ETH/USDT", 0)) or 0))
+        market_4h = Decimal(str(row4_by_symbol.get("BTC/USDT", row4_by_symbol.get("ETH/USDT", 0)) or 0))
         combined = []
         for row in rows_1h:
             symbol = row["symbol"]
@@ -2816,6 +2846,11 @@ class BotRuntime:
                     "return_15m_pct": row15_by_symbol.get(symbol, self._relative_return_pct(symbol, 15)),
                     "return_1h_pct": row["return_pct"],
                     "return_4h_pct": row4_by_symbol.get(symbol, row["return_pct"]),
+                    "market_relative_1h_pct": Decimal(str(row["return_pct"] or 0)) - market_1h,
+                    "market_relative_4h_pct": Decimal(str(row4_by_symbol.get(symbol, row["return_pct"]) or 0)) - market_4h,
+                    "market_benchmark_symbol": "BTC/USDT" if "BTC/USDT" in row1_by_symbol else "ETH/USDT",
+                    "market_benchmark_1h_pct": market_1h,
+                    "market_benchmark_4h_pct": market_4h,
                     "return_24h_pct": self._historical_return_pct(symbol, 24),
                     "return_since_9jst_pct": self._relative_return_from_jst_9(symbol),
                     "ema_fast": ema_fast,
