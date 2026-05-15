@@ -850,6 +850,10 @@ class BotRuntime:
         self.relative_realized_profit = Decimal("0")
         self.relative_unrealized_profit = Decimal("0")
         self.relative_trade_gate: dict[str, Any] = {}
+        self.single_positions: dict[str, dict[str, Any]] = {}
+        self.single_closed_trades: deque[dict[str, Any]] = deque(maxlen=300)
+        self.single_realized_profit = Decimal("0")
+        self.single_unrealized_profit = Decimal("0")
         self.historical_candle_status: dict[str, Any] = {}
         self._historical_candle_cache_mtime: float | None = None
         self._historical_candle_cache: dict[str, dict[str, Any]] = {}
@@ -971,6 +975,7 @@ class BotRuntime:
                     if auto_execute:
                         self._update_futures_paper_strategy(latest["points"])
                         self._update_relative_auto_strategy()
+                        self._update_single_reversal_strategy()
                 else:
                     self.log("futures", "No futures spread data")
 
@@ -3414,6 +3419,137 @@ class BotRuntime:
         self.futures_unrealized_profit = unrealized
         self.futures_realized_profit = realized
 
+    def _single_row_price(self, row: dict[str, Any]) -> Decimal | None:
+        for key in ("vwap", "mid", "bid", "ask"):
+            try:
+                value = Decimal(str(row.get(key) or 0))
+                if value > 0:
+                    return value
+            except Exception:
+                continue
+        return None
+
+    def _single_reversal_signal(self, row: dict[str, Any]) -> tuple[str | None, Decimal]:
+        def dec(key: str, default: str = "0") -> Decimal:
+            try:
+                return Decimal(str(row.get(key) if row.get(key) is not None else default))
+            except Exception:
+                return Decimal(default)
+
+        if not row.get("eligible"):
+            return None, Decimal("0")
+        if dec("spread_pct", "999") > Decimal(os.getenv("SINGLE_MAX_SPREAD_PCT", "0.08")):
+            return None, Decimal("0")
+        if dec("estimated_slippage_100usdt_pct", "999") > Decimal(os.getenv("SINGLE_MAX_SLIP100_PCT", "0.25")):
+            return None, Decimal("0")
+        if abs(dec("funding_rate")) > Decimal(os.getenv("SINGLE_MAX_FUNDING_ABS", "0.05")):
+            return None, Decimal("0")
+
+        return_1h = dec("return_1h_pct")
+        market_relative_1h = dec("market_relative_1h_pct")
+        long_drop = Decimal(os.getenv("SINGLE_LONG_DROP_1H_PCT", "-0.5"))
+        short_rise = Decimal(os.getenv("SINGLE_SHORT_RISE_1H_PCT", "1.0"))
+        if return_1h <= long_drop and market_relative_1h <= long_drop:
+            return "long", abs(return_1h) + abs(market_relative_1h)
+        if return_1h >= short_rise and market_relative_1h >= short_rise:
+            return "short", abs(return_1h) + abs(market_relative_1h)
+        return None, Decimal("0")
+
+    def _update_single_reversal_strategy(self) -> None:
+        features = self.relative_rankings.get("features") or []
+        if not features:
+            return
+        now = datetime.now(timezone.utc)
+        quote_amount = Decimal(os.getenv("SINGLE_PAPER_QUOTE", "100"))
+        max_positions = int(os.getenv("SINGLE_MAX_POSITIONS", "3"))
+        hold_minutes = Decimal(os.getenv("SINGLE_HOLD_MINUTES", "30"))
+        cost_pct = Decimal(os.getenv("SINGLE_COST_PCT", "0.10"))
+        feature_by_symbol = {str(row.get("symbol")): row for row in features if row.get("symbol")}
+
+        unrealized = Decimal("0")
+        to_close = []
+        for position_id, position in self.single_positions.items():
+            row = feature_by_symbol.get(position["symbol"])
+            if not row:
+                continue
+            current = self._single_row_price(row)
+            if not current:
+                continue
+            entry = Decimal(str(position["entry_price"]))
+            raw_return = ((current - entry) / entry) * Decimal("100")
+            trade_return = raw_return if position["side"] == "long" else -raw_return
+            pnl_pct = trade_return - cost_pct
+            profit = Decimal(str(position["quote_amount"])) * (pnl_pct / Decimal("100"))
+            held = Decimal(str((now - position["opened_at"]).total_seconds() / 60))
+            position["last_price"] = current
+            position["last_pnl_pct"] = pnl_pct
+            position["unrealized_profit"] = profit
+            position["held_minutes"] = held
+            unrealized += profit
+            if held >= hold_minutes:
+                to_close.append((position_id, "time_exit"))
+
+        for position_id, status in to_close:
+            position = self.single_positions.pop(position_id, None)
+            if not position:
+                continue
+            profit = Decimal(str(position.get("unrealized_profit", 0)))
+            trade = {
+                "timestamp": now,
+                "mode": "single_reversal_paper",
+                "symbol": position["symbol"],
+                "side": position["side"],
+                "quote_amount": position["quote_amount"],
+                "entry_price": position["entry_price"],
+                "exit_price": position.get("last_price"),
+                "pnl_pct": position.get("last_pnl_pct", Decimal("0")),
+                "profit_quote": profit,
+                "held_minutes": position.get("held_minutes"),
+                "status": status,
+                "entry_reason": position.get("entry_reason", ""),
+            }
+            json_trade = to_jsonable(trade)
+            self.single_closed_trades.appendleft(json_trade)
+            append_jsonl(TRADE_LOG_PATH, trade)
+            self.single_realized_profit += profit
+            self.log("single", f"SINGLE PAPER exit {position['side']} {position['symbol']}: pnl {profit:.4f}")
+
+        if len(self.single_positions) >= max_positions:
+            self.single_unrealized_profit = sum((Decimal(str(p.get("unrealized_profit", 0))) for p in self.single_positions.values()), Decimal("0"))
+            return
+
+        candidates = []
+        for row in features:
+            symbol = str(row.get("symbol"))
+            if not symbol or symbol in self.single_positions:
+                continue
+            side, strength = self._single_reversal_signal(row)
+            price = self._single_row_price(row)
+            if side and price:
+                candidates.append((strength, side, symbol, row, price))
+        candidates.sort(key=lambda item: item[0], reverse=True)
+        for strength, side, symbol, row, price in candidates:
+            if len(self.single_positions) >= max_positions:
+                break
+            position = {
+                "id": symbol,
+                "mode": "single_reversal_paper",
+                "symbol": symbol,
+                "side": side,
+                "quote_amount": quote_amount,
+                "entry_price": price,
+                "last_price": price,
+                "opened_at": now,
+                "held_minutes": Decimal("0"),
+                "last_pnl_pct": -cost_pct,
+                "unrealized_profit": -(quote_amount * cost_pct / Decimal("100")),
+                "entry_reason": f"1h {Decimal(str(row.get('return_1h_pct') or 0)):.2f}%, vs market {Decimal(str(row.get('market_relative_1h_pct') or 0)):.2f}%",
+            }
+            self.single_positions[symbol] = position
+            self.log("single", f"SINGLE PAPER entry {side} {symbol}: {position['entry_reason']}")
+
+        self.single_unrealized_profit = sum((Decimal(str(p.get("unrealized_profit", 0))) for p in self.single_positions.values()), Decimal("0"))
+
     async def _refresh_balances(self, exchanges) -> None:
         balances = []
         for exchange in exchanges:
@@ -3443,8 +3579,10 @@ class BotRuntime:
         self._refresh_futures_paper_pnl()
         futures_start_cash = Decimal(os.getenv("FUTURES_PAPER_START_CASH", "10000"))
         relative_start_cash = Decimal(os.getenv("RELATIVE_PAPER_START_CASH", "10000"))
+        single_start_cash = Decimal(os.getenv("SINGLE_PAPER_START_CASH", "10000"))
         futures_total = self.futures_realized_profit + self.futures_unrealized_profit
         relative_total = self.relative_realized_profit + self.relative_unrealized_profit
+        single_total = self.single_realized_profit + self.single_unrealized_profit
         relative_rankings = self._state_relative_rankings()
         return {
             "running": running,
@@ -3506,6 +3644,24 @@ class BotRuntime:
                     "unrealized": self.relative_unrealized_profit,
                     "trade_count": len(self.relative_closed_trades),
                     "open_count": len(self.relative_positions),
+                }
+            ),
+            "single_reversal_positions": to_jsonable(list(self.single_positions.values())),
+            "single_reversal_closed_trades": list(self.single_closed_trades),
+            "single_reversal_pnl": to_jsonable(
+                {
+                    "realized": self.single_realized_profit,
+                    "unrealized": self.single_unrealized_profit,
+                    "total": single_total,
+                }
+            ),
+            "single_reversal_account": to_jsonable(
+                {
+                    "starting_cash": single_start_cash,
+                    "equity": single_start_cash + single_total,
+                    "trade_count": len(self.single_closed_trades),
+                    "open_count": len(self.single_positions),
+                    "rule": "1h急落は30分ロング / 1h急騰は30分ショート",
                 }
             ),
             "historical_candle_status": to_jsonable(self.historical_candle_status),
